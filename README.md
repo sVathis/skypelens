@@ -1,6 +1,6 @@
 # 🔍 SkypeLens
 
-The best Skype JSON viewer you'll ever find. SkypeLens transforms your exported Skype data into a native-like recreation of Skype's interface – right in your browser.
+The best Skype and Microsoft Teams export viewer you'll ever find. SkypeLens transforms your exported chat data into a native-like recreation of Skype's interface – right in your browser.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Bun](https://img.shields.io/badge/runtime-bun-red)](https://bun.sh)
@@ -36,6 +36,7 @@ No installation required • Runs in your browser • Privacy-first
 - 🔒 **Privacy First** – Everything processes locally in your browser; no data ever sent to servers
 - 🚀 **No File Size Limits** – Handles massive `messages.json` files (500MB+) with streaming parser and virtual scrolling
 - 🖼️ **Full Media Support** – Upload entire Skype export folder to view images, videos, and all media files alongside conversations
+- 🧩 **Teams export support** – Also works with Microsoft Teams exports that share the same (or very similar) `messages.json` structure
 - 🔍 **Message Search** – Search within conversations with real-time filtering, match highlighting, and result navigation
 - ⚡ **Performance Optimised** – Virtual scrolling, lazy loading, and memory-efficient rendering for smooth browsing
 
@@ -68,11 +69,13 @@ SkypeLens intelligently processes Skype's built-in translation feature:
 
 ## 🚀 Quick Start
 
-### Exporting Your Skype Data
+### Exporting Your Skype / Teams Data
 
-1. Go to [https://go.skype.com/export](https://go.skype.com/export)
+1. Go to [https://go.skype.com/export](https://go.skype.com/export) (Skype) or [https://teams.live.com/dataexport](https://teams.live.com/dataexport) (Teams)
 2. Request your data export
 3. Download and extract the archive when ready
+
+(Teams export is for personal Microsoft accounts on Teams.)
 
 ### Using SkypeLens
 
