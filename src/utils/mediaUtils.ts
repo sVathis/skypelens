@@ -5,13 +5,21 @@ const uriObjectPattern =
   /<URIObject[^>]*uri="https:\/\/api\.asm\.skype\.com\/v1\/objects\/([a-zA-Z0-9-]+)"/;
 const picPattern = /[?&]pic=([a-zA-Z0-9-]+)/;
 const filePattern = /[?&]file=([a-zA-Z0-9-]+)/;
+// Teams format: <img src="https://experimental-api.asm.skype.com/v1/objects/{id}/views/imgo">
+const teamsImgPattern =
+  /<img[^>]*src="https:\/\/[^"]*\.asm\.skype\.com\/v1\/objects\/([a-zA-Z0-9-]+)/;
+// Teams format: <video src="https://experimental-api.asm.skype.com/v1/objects/{id}/views/video">
+const teamsVideoPattern =
+  /<video[^>]*src="https:\/\/[^"]*\.asm\.skype\.com\/v1\/objects\/([a-zA-Z0-9-]+)/;
 
 /**
  * Extracts the media ID from message content.
- * Handles different Skype media URL formats:
+ * Handles different Skype and Teams media URL formats:
  * - URIObject: <URIObject uri="https://api.asm.skype.com/v1/objects/{id}">
  * - pic parameter: ?pic={id}
  * - file parameter: ?file={id}
+ * - Teams img: <img src="https://experimental-api.asm.skype.com/v1/objects/{id}/views/imgo">
+ * - Teams video: <video src="https://experimental-api.asm.skype.com/v1/objects/{id}/views/video">
  * Returns the first match found, or null if no media ID is present.
  */
 export function extractMediaId(content: string): string | null {
@@ -19,6 +27,8 @@ export function extractMediaId(content: string): string | null {
     uriObjectPattern.exec(content)?.[1] ||
     picPattern.exec(content)?.[1] ||
     filePattern.exec(content)?.[1] ||
+    teamsImgPattern.exec(content)?.[1] ||
+    teamsVideoPattern.exec(content)?.[1] ||
     null
   );
 }
@@ -58,6 +68,7 @@ async function getMediaMetadata(
 /**
  * Creates an object URL for a media file.
  * Handles file extension detection and alternative extensions (jpg/jpeg).
+ * Works for both Skype (with metadata) and Teams (without metadata).
  */
 export async function createMediaUrl(
   mediaId: string,
@@ -65,32 +76,38 @@ export async function createMediaUrl(
 ): Promise<string | null> {
   try {
     const metadata = await getMediaMetadata(mediaId, mediaFiles);
-    if (!metadata) {
-      return null;
-    }
+    
+    // If we have metadata (Skype), use the filename from it
+    if (metadata) {
+      const extension = getFileExtension(metadata.filename);
+      if (extension) {
+        const mediaFileName = `${mediaId}.1.${extension}`;
+        let mediaFile = mediaFiles.get(mediaFileName);
 
-    const extension = getFileExtension(metadata.filename);
-    if (!extension) {
-      return null;
-    }
+        // Handle jpg/jpeg extension variations (Skype may store as either)
+        if (!mediaFile && isImageExtension(extension)) {
+          const altExt =
+            extension === "jpg" ? "jpeg" : extension === "jpeg" ? "jpg" : null;
+          if (altExt) {
+            mediaFile = mediaFiles.get(`${mediaId}.1.${altExt}`);
+          }
+        }
 
-    // Skype media files follow pattern: {mediaId}.1.{extension}
-    // The ".1" indicates the first version/variant of the media
-    const mediaFileName = `${mediaId}.1.${extension}`;
-    let mediaFile = mediaFiles.get(mediaFileName);
-
-    // Handle jpg/jpeg extension variations (Skype may store as either)
-    if (!mediaFile && isImageExtension(extension)) {
-      const altExt =
-        extension === "jpg" ? "jpeg" : extension === "jpeg" ? "jpg" : null;
-      if (altExt) {
-        mediaFile = mediaFiles.get(`${mediaId}.1.${altExt}`);
+        if (mediaFile) {
+          return URL.createObjectURL(mediaFile);
+        }
       }
     }
 
-    if (mediaFile) {
-      const url = URL.createObjectURL(mediaFile);
-      return url;
+    // If no metadata (Teams) or file not found, try common extensions
+    // Teams media files follow pattern: {mediaId}.1.{extension}
+    const commonExtensions = ["jpeg", "jpg", "png", "gif", "mp4", "mov", "avi", "webm"];
+    
+    for (const ext of commonExtensions) {
+      const mediaFile = mediaFiles.get(`${mediaId}.1.${ext}`);
+      if (mediaFile) {
+        return URL.createObjectURL(mediaFile);
+      }
     }
 
     return null;
@@ -105,17 +122,22 @@ export async function createMediaUrl(
 
 /**
  * Creates an object URL for a video thumbnail.
- * Video thumbnails follow pattern: {mediaId}.2.jpeg (the ".2" indicates thumbnail variant).
+ * Video thumbnails follow pattern: {mediaId}.2.jpeg or {mediaId}.2.jpg
+ * The ".2" indicates thumbnail variant (works for both Skype and Teams).
  */
 export async function createVideoThumbnailUrl(
   mediaId: string,
   mediaFiles: Map<string, File>,
 ): Promise<string | null> {
   try {
-    const thumbnailFile = mediaFiles.get(`${mediaId}.2.jpeg`);
+    // Try jpeg first, then jpg
+    let thumbnailFile = mediaFiles.get(`${mediaId}.2.jpeg`);
+    if (!thumbnailFile) {
+      thumbnailFile = mediaFiles.get(`${mediaId}.2.jpg`);
+    }
+    
     if (thumbnailFile) {
-      const url = URL.createObjectURL(thumbnailFile);
-      return url;
+      return URL.createObjectURL(thumbnailFile);
     }
 
     return null;
@@ -133,18 +155,34 @@ export async function getMediaType(
   mediaFiles: Map<string, File>,
 ): Promise<"image" | "video" | null> {
   const metadata = await getMediaMetadata(mediaId, mediaFiles);
-  if (!metadata) {
-    return null;
+  
+  // If we have metadata (Skype), use it
+  if (metadata) {
+    const extension = getFileExtension(metadata.filename);
+    if (extension) {
+      return isImageExtension(extension)
+        ? "image"
+        : isVideoExtension(extension)
+          ? "video"
+          : null;
+    }
   }
 
-  const extension = getFileExtension(metadata.filename);
-  if (!extension) {
-    return null;
+  // If no metadata (Teams), check for actual files with common extensions
+  const imageExtensions = ["jpeg", "jpg", "png", "gif"];
+  const videoExtensions = ["mp4", "mov", "avi", "webm"];
+
+  for (const ext of imageExtensions) {
+    if (mediaFiles.has(`${mediaId}.1.${ext}`)) {
+      return "image";
+    }
   }
 
-  return isImageExtension(extension)
-    ? "image"
-    : isVideoExtension(extension)
-      ? "video"
-      : null;
+  for (const ext of videoExtensions) {
+    if (mediaFiles.has(`${mediaId}.1.${ext}`)) {
+      return "video";
+    }
+  }
+
+  return null;
 }

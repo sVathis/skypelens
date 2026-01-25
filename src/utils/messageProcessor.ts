@@ -247,7 +247,14 @@ function processMessage(
     );
   }
 
-  if (messagetype === "RichText") {
+  if (messagetype === "RichText" || messagetype === "RichText/Html") {
+    // Check if this is a Teams media message (has img/video tags with media URLs)
+    const mediaId = extractMediaId(message.content);
+    
+    if (mediaId) {
+      return handleMediaMessage(message, context);
+    }
+    
     return createBaseMessage(
       message,
       context,

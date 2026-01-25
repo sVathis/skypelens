@@ -61,6 +61,8 @@ SkypeLens intelligently processes Skype's built-in translation feature:
 - **Messages you received** – Shows the translated message in your language
 - **Automatic detection** – Parses translation metadata from message content without manual configuration
 
+**Note**: Translation support only works with Skype exports. Teams exports lack translation metadata.
+
 ### 🖼️ Media Support
 - **Format Support** – Displays common image formats (JPG, PNG, GIF) and video formats (MP4, AVI)
 - **Thumbnail Strip** – Browse all media in a conversation with scrollable thumbnails and position counter

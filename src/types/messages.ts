@@ -48,7 +48,7 @@ export interface Message {
   conversationid: string;
   from: string;
   properties?: MessageProperties | null;
-  amsreferences?: unknown;
+  amsreferences?: string[] | null;
 }
 
 export interface MessageProperties {
