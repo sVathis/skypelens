@@ -287,14 +287,25 @@ const emojiPatterns: Array<[RegExp, string]> = Object.keys(skypeEmojiMap)
 const ssTagPattern =
   /<ss[^>]*type="([^"]+)"[^>]*>[\s\S]*?<\/ss>/gi;
 
+// Teams emoji format: <span class="animated-emoticon-*"><img ... alt="❤️"></span>
+const teamsEmojiPattern =
+  /<span[^>]*class="animated-emoticon-[^"]*"[^>]*>[\s\S]*?<img[^>]*alt="([^"]*)"[^>]*>[\s\S]*?<\/span>/gi;
+
 export function parseSkypeEmoji(text: string): string {
   if (!text) return text;
 
-  let parsed = text.replace(ssTagPattern, (_, rawType) => {
+  // Handle Teams emoji format first
+  let parsed = text.replace(teamsEmojiPattern, (_, alt) => {
+    return alt || "";
+  });
+
+  // Handle Skype <ss> tags
+  parsed = parsed.replace(ssTagPattern, (_, rawType) => {
     const type = (rawType ?? "").toLowerCase();
     return skypeEmojiMap[type] || "";
   });
 
+  // Handle Skype shorthand notation (smile)
   if (parsed.indexOf("(") === -1) {
     return parsed;
   }
