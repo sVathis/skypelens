@@ -8,6 +8,7 @@ import {
 } from "../utils/deepLink";
 import { createTabBridge, type TabBridge } from "../utils/tabBridge";
 import { TAB_BRIDGE_CHANNEL } from "../constants/deepLink";
+import { canShowDeepLink } from "../utils/messageLocator";
 
 function pushUrl(url: string) {
   if (url !== window.location.href) {
@@ -43,7 +44,7 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
   const [forwardedTarget, setForwardedTarget] = useState<DeepLinkTarget | null>(null);
   const bridgeRef = useRef<TabBridge | null>(null);
   const hasExport = useMessageStore((state) => state.exportData !== null);
-  const pendingDeepLink = useMessageStore((state) => state.pendingDeepLink);
+  const requestedDeepLink = useMessageStore((state) => state.requestedDeepLink);
 
   useEffect(() => {
     const handlePopState = () => applyLocationToStore();
@@ -57,10 +58,9 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
 
     const bridge = createTabBridge({
       channel: new BroadcastChannel(TAB_BRIDGE_CHANNEL),
+      // Claim only if this export has the message, not just the conversation
       canHandle: (target) =>
-        useMessageStore
-          .getState()
-          .conversations.some((c) => c.id === target.conversationId),
+        canShowDeepLink(useMessageStore.getState().conversations, target),
       onNavigate: (target) => {
         pushUrl(buildDeepLinkUrl(target, getAppBaseUrl()));
         useMessageStore.getState().requestNavigation(target);
@@ -83,27 +83,29 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
 
   // A fresh tab with a deep link but no export asks other tabs to show it
   useEffect(() => {
-    if (!hasExport && pendingDeepLink) {
+    if (!hasExport && requestedDeepLink) {
       setForwardedTarget(null);
-      bridgeRef.current?.offer(pendingDeepLink);
+      bridgeRef.current?.offer(requestedDeepLink);
     }
-  }, [hasExport, pendingDeepLink]);
+  }, [hasExport, requestedDeepLink]);
 
   return { forwardedTarget: hasExport ? null : forwardedTarget };
 }
 
 /**
- * Selects a conversation from a user action and records it in browser history,
- * so Back returns to the previously viewed conversation or linked message.
+ * Opens a conversation from a user action and records it in browser history, so Back
+ * returns to the previously viewed conversation or linked message. Goes through
+ * requestNavigation so the store's requested link keeps matching the URL.
  */
 export function useOpenConversation() {
-  const selectConversation = useMessageStore((state) => state.selectConversation);
+  const requestNavigation = useMessageStore((state) => state.requestNavigation);
 
   return useCallback(
     (conversationId: string) => {
-      selectConversation(conversationId);
-      pushUrl(buildDeepLinkUrl({ conversationId, messageId: null }, getAppBaseUrl()));
+      const target = { conversationId, messageId: null };
+      requestNavigation(target);
+      pushUrl(buildDeepLinkUrl(target, getAppBaseUrl()));
     },
-    [selectConversation],
+    [requestNavigation],
   );
 }

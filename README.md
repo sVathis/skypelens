@@ -88,7 +88,7 @@ SkypeLens intelligently processes Skype's built-in translation feature:
    </div>
 
 2. **Choose your upload method:**
-   - **Conversations only** – Drag and drop `messages.json` or click to select it
+   - **Conversations only** – Drag and drop `messages.json` (or a single extracted conversation JSON with `id` and `MessageList`) or click to select it
    - **Full media support** – Click "Select Export Directory" and choose the entire extracted Skype export folder
 3. Browse your conversations with the familiar Skype interface!
 
@@ -118,8 +118,8 @@ https://thongtech.github.io/skypelens/?conversationId=19%3Aabc.def_01%40thread.s
 
 - **Export already loaded in this tab** (Back/Forward, or a link handled in place): SkypeLens selects the conversation, loads as much history as needed, scrolls the message to the centre and highlights it, with the surrounding messages around it. Any active search is cleared so it can't hide the target.
 - **Fresh tab, nothing loaded**: SkypeLens keeps nothing between visits, so it shows the upload screen with a note about the link. Load the export and it jumps to the message automatically.
-- **Fresh tab while another SkypeLens tab has the export loaded**: the link is handed to that tab, which navigates to the message. Only the two IDs are passed between tabs; the export itself never leaves the tab it was loaded into.
-- If the conversation or message is not in the loaded export, SkypeLens says so instead of opening something else.
+- **Fresh tab while another SkypeLens tab has the export loaded**: the link is handed to a tab whose export contains that message (not just the conversation), which navigates to it. Only the two IDs are passed between tabs; the export itself never leaves the tab it was loaded into.
+- If the conversation or message is not in the loaded export, SkypeLens says so instead of opening something else. **Load another export** in that message lets you load the right export (e.g. a newer one); the link then completes.
 - If the linked message is one SkypeLens folds into another bubble (a translation pair), that bubble is highlighted and a note explains why. If it is a message SkypeLens doesn't display (e.g. an album placeholder), the nearest displayed message gets a dashed highlight and a note.
 - Clicking a conversation in the sidebar records it in browser history, so Back returns to the previous conversation or linked message.
 

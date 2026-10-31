@@ -45,12 +45,18 @@ interface MessageStore {
   exportData: SkypeExport | null;
   swappedRoles: Record<string, boolean>;
   processedMessagesCache: ProcessedMessagesCache;
-  /** Deep link waiting for an export to be loaded. */
-  pendingDeepLink: DeepLinkTarget | null;
+  /**
+   * The deep link the URL currently asks for. Kept after it is resolved (or fails to
+   * resolve), so loading a different export re-resolves it. While no export is
+   * loaded, it is the link waiting for one.
+   */
+  requestedDeepLink: DeepLinkTarget | null;
   navigationTarget: NavigationTarget | null;
   navigationError: NavigationError | null;
   navigationRequestCount: number;
   setExportData: (data: SkypeExport) => void;
+  /** Forgets the loaded export (to load another one); keeps the requested link. */
+  unloadExport: () => void;
   selectConversation: (id: string) => void;
   getSelectedConversation: () => Conversation | null;
   toggleRoleSwap: (conversationId: string) => void;
@@ -75,7 +81,6 @@ interface MessageStore {
 type NavigationState = Pick<
   MessageStore,
   | "selectedConversationId"
-  | "pendingDeepLink"
   | "navigationTarget"
   | "navigationError"
   | "navigationRequestCount"
@@ -94,7 +99,6 @@ function resolveDeepLink(
 ): NavigationState {
   const requestId = requestCount + 1;
   const base = {
-    pendingDeepLink: null,
     navigationTarget: null,
     navigationRequestCount: requestId,
   };
@@ -161,7 +165,7 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
   exportData: null,
   swappedRoles: {},
   processedMessagesCache: {},
-  pendingDeepLink: null,
+  requestedDeepLink: null,
   navigationTarget: null,
   navigationError: null,
   navigationRequestCount: 0,
@@ -184,12 +188,13 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
     });
 
     const selectedId = filteredConversations[0]?.id || null;
-    const { pendingDeepLink, navigationRequestCount, navigationError } = get();
+    const { requestedDeepLink, navigationRequestCount, navigationError } = get();
 
-    // Complete a deep link that was opened before the export was loaded
-    const navigation: Partial<NavigationState> = pendingDeepLink
+    // Complete the link in the URL: opened before any export was loaded, or not
+    // found in the previously loaded export
+    const navigation: Partial<NavigationState> = requestedDeepLink
       ? resolveDeepLink(
-          pendingDeepLink,
+          requestedDeepLink,
           data,
           filteredConversations,
           selectedId,
@@ -207,6 +212,18 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
       selectedConversationId: selectedId,
       processedMessagesCache: {},
       ...navigation,
+    });
+  },
+
+  unloadExport: () => {
+    set({
+      exportData: null,
+      conversations: [],
+      selectedConversationId: null,
+      swappedRoles: {},
+      processedMessagesCache: {},
+      navigationTarget: null,
+      navigationError: null,
     });
   },
 
@@ -268,19 +285,20 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
       get();
 
     if (!exportData) {
-      set({ pendingDeepLink: target, navigationTarget: null, navigationError: null });
+      set({ requestedDeepLink: target, navigationTarget: null, navigationError: null });
       return;
     }
 
-    set(
-      resolveDeepLink(
+    set({
+      requestedDeepLink: target,
+      ...resolveDeepLink(
         target,
         exportData,
         conversations,
         selectedConversationId,
         navigationRequestCount,
       ),
-    );
+    });
   },
 
   renavigate: () => {
@@ -308,7 +326,7 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
   },
 
   clearNavigation: () => {
-    set({ pendingDeepLink: null, navigationTarget: null, navigationError: null });
+    set({ requestedDeepLink: null, navigationTarget: null, navigationError: null });
   },
 
   setNavigationError: (error) => {

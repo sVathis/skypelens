@@ -21,12 +21,13 @@ describe("deep-link navigation state", () => {
   it("keeps a link opened before the export is loaded and completes it on load", () => {
     const messageId = messageIdFor(10);
     store().requestNavigation({ conversationId: CONVERSATION_ID, messageId });
-    expect(store().pendingDeepLink).toEqual({ conversationId: CONVERSATION_ID, messageId });
+    expect(store().requestedDeepLink).toEqual({ conversationId: CONVERSATION_ID, messageId });
     expect(store().navigationTarget).toBeNull();
 
     store().setExportData(createSyntheticExport(COUNT).exportData);
 
-    expect(store().pendingDeepLink).toBeNull();
+    // Kept, so a replaced export can re-resolve it
+    expect(store().requestedDeepLink).toEqual({ conversationId: CONVERSATION_ID, messageId });
     expect(store().selectedConversationId).toBe(CONVERSATION_ID);
     expect(store().navigationTarget).toMatchObject({
       conversationId: CONVERSATION_ID,
@@ -109,6 +110,51 @@ describe("deep-link navigation state", () => {
   });
 });
 
+describe("replacing the export", () => {
+  const link = { conversationId: CONVERSATION_ID, messageId: messageIdFor(800) };
+
+  it("re-resolves the URL's link when the first export lacked the message", () => {
+    store().requestNavigation(link);
+    store().setExportData(createSyntheticExport(500).exportData); // older export
+    expect(store().navigationError?.kind).toBe("message-not-found");
+    expect(store().requestedDeepLink).toEqual(link);
+
+    store().unloadExport();
+    expect(store().exportData).toBeNull();
+    expect(store().navigationError).toBeNull();
+    expect(store().requestedDeepLink).toEqual(link);
+
+    store().setExportData(createSyntheticExport(1_000).exportData);
+    expect(store().navigationError).toBeNull();
+    expect(store().navigationTarget).toMatchObject({
+      messageId: messageIdFor(800),
+      rawIndex: rawIndexFor(800, 1_000),
+      status: "pending",
+    });
+  });
+
+  it("re-resolves when an export is replaced without unloading first", () => {
+    store().setExportData(createSyntheticExport(500).exportData);
+    store().requestNavigation(link);
+    expect(store().navigationError?.kind).toBe("message-not-found");
+
+    store().setExportData(createSyntheticExport(1_000).exportData);
+    expect(store().navigationTarget?.messageId).toBe(messageIdFor(800));
+  });
+
+  it("follows conversation clicks, which replace the link in the URL", () => {
+    store().setExportData(createSyntheticExport(500).exportData);
+    store().requestNavigation(link);
+    // What useOpenConversation does for a sidebar click
+    store().requestNavigation({ conversationId: GROUP_CONVERSATION_ID, messageId: null });
+    expect(store().requestedDeepLink).toEqual({ conversationId: GROUP_CONVERSATION_ID, messageId: null });
+
+    store().setExportData(createSyntheticExport(1_000).exportData);
+    expect(store().selectedConversationId).toBe(GROUP_CONVERSATION_ID);
+    expect(store().navigationTarget).toBeNull();
+  });
+});
+
 describe("applyLocationToStore", () => {
   it("follows the URL as it changes (Back/Forward)", () => {
     store().setExportData(createSyntheticExport(COUNT).exportData);
@@ -129,6 +175,6 @@ describe("applyLocationToStore", () => {
   it("reports malformed links", () => {
     applyLocationToStore("?messageId=1");
     expect(store().navigationError?.kind).toBe("invalid-link");
-    expect(store().pendingDeepLink).toBeNull();
+    expect(store().requestedDeepLink).toBeNull();
   });
 });

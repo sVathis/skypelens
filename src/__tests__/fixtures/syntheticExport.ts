@@ -48,7 +48,7 @@ export function createSyntheticConversation(
 
   // Special processing cases in the middle of the conversation (chronological positions)
   const setType = (n: number, patch: Partial<Message>) => {
-    messages[n] = { ...messages[n], ...patch };
+    if (n < count) messages[n] = { ...messages[n], ...patch };
   };
   const translation = (text: string) =>
     JSON.stringify({ translations: [{ translation: text, loc: "en" }], oloc: "xx", oid: "0" });

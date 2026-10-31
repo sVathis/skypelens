@@ -1,4 +1,4 @@
-import { Alert, Center, Code, Stack, Text } from "@mantine/core";
+import { Alert, Button, Center, Code, Stack, Text } from "@mantine/core";
 import { IconAlertCircle, IconExternalLink, IconLink } from "@tabler/icons-react";
 import { useCallback } from "react";
 import { FileUpload } from "../Upload/FileUpload";
@@ -10,9 +10,10 @@ import { useDeepLinkNavigation } from "../../hooks/useDeepLinkNavigation";
 export function MainContent() {
 	const { setExportData } = useMessageStore();
 	const exportData = useExportData();
-	const pendingDeepLink = useMessageStore((state) => state.pendingDeepLink);
+	const requestedDeepLink = useMessageStore((state) => state.requestedDeepLink);
 	const navigationError = useMessageStore((state) => state.navigationError);
 	const setNavigationError = useMessageStore((state) => state.setNavigationError);
+	const unloadExport = useMessageStore((state) => state.unloadExport);
 	const { forwardedTarget } = useDeepLinkNavigation();
 
 	const handleFileProcessed = useCallback((data: SkypeExport) => {
@@ -30,7 +31,15 @@ export function MainContent() {
 			onClose={() => setNavigationError(null)}
 			style={{ flexShrink: 0 }}
 		>
-			{navigationError.message}
+			<Stack gap="xs" align="flex-start">
+				<Text size="sm">{navigationError.message}</Text>
+				{/* The link may come from a different export: load that one and the link completes */}
+				{exportData && requestedDeepLink && navigationError.kind !== "invalid-link" && (
+					<Button size="xs" variant="light" color="red" onClick={unloadExport}>
+						Load another export
+					</Button>
+				)}
+			</Stack>
 		</Alert>
 	);
 
@@ -41,11 +50,11 @@ export function MainContent() {
 					Another SkypeLens tab already has this export loaded and is now showing the linked message. Switch to that tab, or load the export below to view it here.
 				</Text>
 			</Alert>
-		) : pendingDeepLink ? (
+		) : requestedDeepLink ? (
 			<Alert icon={<IconLink size={16} />} color="blue" title="Load the export to open this link">
 				<Stack gap={4}>
 					<Text size="sm">
-						This link points to {pendingDeepLink.messageId ? "a message in " : ""}conversation <Code>{pendingDeepLink.conversationId}</Code>. SkypeLens keeps nothing between visits, so load the Skype export that contains it and SkypeLens will jump straight there.
+						This link points to {requestedDeepLink.messageId ? "a message in " : ""}conversation <Code>{requestedDeepLink.conversationId}</Code>. Load the Skype export that contains it and SkypeLens will jump straight there. Nothing is kept between visits, so the export has to be loaded in each new tab.
 					</Text>
 				</Stack>
 			</Alert>

@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTabBridge, type BridgeChannel } from "../utils/tabBridge";
 import type { DeepLinkTarget } from "../utils/deepLink";
+import type { Conversation } from "../types/messages";
+import { canShowDeepLink } from "../utils/messageLocator";
+import {
+  CONVERSATION_ID,
+  createSyntheticConversation,
+  messageIdFor,
+} from "./fixtures/syntheticExport";
 
 /** In-memory stand-in for BroadcastChannel: delivers to every other channel, asynchronously. */
 function createBus() {
@@ -64,6 +71,34 @@ describe("tab bridge", () => {
     const navigations = loadedA.onNavigate.mock.calls.length + loadedB.onNavigate.mock.calls.length;
     expect(navigations).toBe(1);
     expect(fresh.onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("skips a tab whose export has the conversation but not the message", async () => {
+    const bus = createBus();
+    const { conversation: older } = createSyntheticConversation(500);
+    const { conversation: newer } = createSyntheticConversation(1_000);
+    const link: DeepLinkTarget = { conversationId: CONVERSATION_ID, messageId: messageIdFor(800) };
+
+    const makeTab = (conversations: Conversation[]) => {
+      const onNavigate = vi.fn();
+      createTabBridge({
+        channel: bus.open(),
+        canHandle: (t) => canShowDeepLink(conversations, t),
+        onNavigate,
+        onForwarded: vi.fn(),
+      });
+      return onNavigate;
+    };
+    // The older export is created first, so it would answer first if it claimed
+    const olderNavigate = makeTab([older]);
+    const newerNavigate = makeTab([newer]);
+    const fresh = tab(bus, []);
+
+    fresh.bridge.offer(link);
+    await flush();
+    expect(olderNavigate).not.toHaveBeenCalled();
+    expect(newerNavigate).toHaveBeenCalledWith(link);
+    expect(fresh.onForwarded).toHaveBeenCalledWith(link);
   });
 
   it("does nothing when no tab can show the link", async () => {

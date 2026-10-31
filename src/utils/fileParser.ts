@@ -1,4 +1,4 @@
-import { SkypeExport } from "../types/messages";
+import type { Conversation, SkypeExport } from "../types/messages";
 import { debugLog } from "./debug";
 import {
   SMALL_FILE_THRESHOLD,
@@ -94,10 +94,73 @@ export async function parseDirectoryFiles(
   return { ...data, mediaFiles: mediaMap };
 }
 
+/**
+ * Picks the export owner for JSON without a `userId`: the most frequent sender that
+ * is not the conversation itself (in a 1:1 chat the conversation ID is the other
+ * person), falling back to the most frequent sender. Only affects which side bubbles
+ * appear on, which the role swap button can flip.
+ */
+function inferUserId(conversations: Conversation[]): string {
+  const counts = new Map<string, number>();
+  const conversationIds = new Set(conversations.map((c) => c.id));
+  for (const conversation of conversations) {
+    for (const message of conversation.MessageList ?? []) {
+      if (message.from) counts.set(message.from, (counts.get(message.from) ?? 0) + 1);
+    }
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return (
+    ranked.find(([from]) => !conversationIds.has(from))?.[0] ?? ranked[0]?.[0] ?? ""
+  );
+}
+
+/**
+ * Accepts a full Skype export (`{ userId, conversations }`), an export without
+ * `userId`, or a single extracted conversation (`{ id, MessageList, ... }`), and returns
+ * the full export shape. Conversation and message IDs are kept as they are, so deep
+ * links work the same for all of them.
+ */
+export function normalizeSkypeExport(parsed: unknown): SkypeExport {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid Skype export file format");
+  }
+  const data = parsed as Partial<SkypeExport> & Partial<Conversation>;
+
+  if (Array.isArray(data.conversations)) {
+    return data.userId
+      ? (data as SkypeExport)
+      : { ...(data as SkypeExport), userId: inferUserId(data.conversations) };
+  }
+
+  if (typeof data.id === "string" && Array.isArray(data.MessageList)) {
+    const conversation: Conversation = {
+      ...(data as Conversation),
+      displayName: data.displayName ?? data.id,
+      version: data.version ?? 0,
+      properties: data.properties ?? {
+        conversationblocked: false,
+        lastimreceivedtime: null,
+        consumptionhorizon: null,
+        conversationstatus: null,
+      },
+      threadProperties: data.threadProperties ?? null,
+    };
+    return {
+      userId: data.userId || inferUserId([conversation]),
+      exportDate: "",
+      conversations: [conversation],
+    };
+  }
+
+  throw new Error(
+    "Invalid Skype export file format: expected a Skype export or a single conversation with id and MessageList",
+  );
+}
+
 function parseJsonContent(content: string): SkypeExport {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(content) as SkypeExport;
-    return parsed;
+    parsed = JSON.parse(content);
   } catch (error) {
     console.error("[fileParser] Failed to parse JSON content:", {
       error,
@@ -108,6 +171,7 @@ function parseJsonContent(content: string): SkypeExport {
       `Failed to parse JSON: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
   }
+  return normalizeSkypeExport(parsed);
 }
 
 async function parseSmallFile(

@@ -57,13 +57,9 @@ export function FileUpload({ onFileProcessed, notice }: FileUploadProps) {
 
     try {
       // parseJsonFile handles both small and large files automatically
-      // For large files (>100MB), it uses streaming to avoid memory issues
+      // For large files (>100MB), it uses streaming to avoid memory issues.
+      // It also validates the structure and accepts single extracted conversations.
       const data = await parseJsonFile(file, setProgress);
-
-      // Validate that the file contains required Skype export structure
-      if (!data.userId || !data.conversations) {
-        throw new Error("Invalid Skype export file format");
-      }
 
       debugLog("[FileUpload] File processed successfully:", {
         userId: data.userId,
@@ -91,10 +87,6 @@ export function FileUpload({ onFileProcessed, notice }: FileUploadProps) {
       // parseDirectoryFiles extracts messages.json and builds a map of media files
       // Media files are indexed by their ID for efficient lookup during message rendering
       const data = await parseDirectoryFiles(Array.from(files), setProgress);
-
-      if (!data.userId || !data.conversations) {
-        throw new Error("Invalid Skype export directory format");
-      }
 
       debugLog("[FileUpload] Directory processed successfully:", {
         userId: data.userId,
@@ -289,7 +281,7 @@ export function FileUpload({ onFileProcessed, notice }: FileUploadProps) {
                     Upload messages.json File
                   </Text>
                   <Text size="sm" c="dimmed">
-                    For conversations only (no media files)
+                    Full export or a single extracted conversation (no media files)
                   </Text>
                 </Stack>
               </Group>

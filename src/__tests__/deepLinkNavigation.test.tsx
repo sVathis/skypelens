@@ -4,9 +4,11 @@ import { MantineProvider } from "@mantine/core";
 import { MainContent } from "../components/Layout/MainContent";
 import { useMessageStore } from "../store/messageStore";
 import { buildDeepLinkUrl, parseDeepLink } from "../utils/deepLink";
+import { normalizeSkypeExport } from "../utils/fileParser";
 import {
   CONVERSATION_ID,
   GROUP_CONVERSATION_ID,
+  createSyntheticConversation,
   createSyntheticExport,
   messageIdFor,
 } from "./fixtures/syntheticExport";
@@ -133,7 +135,7 @@ describe("deep-link navigation in the message view", () => {
 
     await waitFor(() => text().includes("Load the export to open this link"), "upload notice");
     expect(text()).toContain(CONVERSATION_ID);
-    expect(store().pendingDeepLink?.messageId).toBe(messageIdFor(n));
+    expect(store().requestedDeepLink?.messageId).toBe(messageIdFor(n));
 
     // What FileUpload does once the user has picked the export
     store().setExportData(exportData);
@@ -214,6 +216,35 @@ describe("deep-link navigation in the message view", () => {
     expect(store().selectedConversationId).toBe(CONVERSATION_ID);
   });
 
+  it("completes the link after the user switches to the right export (a bare conversation JSON)", async () => {
+    const n = 800;
+    window.history.replaceState(null, "", linkTo(n));
+    renderApp();
+    await waitFor(() => text().includes("Load the export to open this link"), "upload notice");
+
+    // First the user loads an older export, which doesn't have the message yet
+    store().setExportData(createSyntheticExport(500).exportData);
+    await waitFor(() => text().includes(`Message "${messageIdFor(n)}" was not found`), "error");
+    expect(highlighted()).toBeNull();
+
+    const loadAnother = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Load another export",
+    );
+    expect(loadAnother).toBeTruthy();
+    loadAnother!.click();
+    await waitFor(() => text().includes("Load the export to open this link"), "upload screen again");
+
+    // Then the newer extraction: a single conversation object, as the analysis pipeline produces
+    const { conversation } = createSyntheticConversation(1_000);
+    const bare = JSON.parse(JSON.stringify(conversation));
+    store().setExportData(normalizeSkypeExport(bare));
+
+    await waitForNavigation(messageIdFor(n));
+    expect(highlighted()?.dataset.messageId).toBe(messageIdFor(n));
+    expectCentered(messageIdFor(n));
+    expect(text()).not.toContain("Could not open link");
+  });
+
   it("clears an active search, works with swapped roles and keeps the target across a swap", async () => {
     await renderWithExport();
     navigateInPage(buildDeepLinkUrl({ conversationId: CONVERSATION_ID, messageId: null }, `${window.location.origin}/`));
@@ -292,7 +323,7 @@ describe("deep-link navigation in the message view", () => {
     const n = 300; // raw index 11,699
     window.history.replaceState(null, "", linkTo(n));
     renderApp();
-    await waitFor(() => store().pendingDeepLink !== null, "pending link");
+    await waitFor(() => store().requestedDeepLink !== null, "pending link");
 
     const start = performance.now();
     store().setExportData(big);

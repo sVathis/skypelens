@@ -1,4 +1,5 @@
-import type { Message, ProcessedMessage } from "../types/messages";
+import type { Conversation, Message, ProcessedMessage } from "../types/messages";
+import type { DeepLinkTarget } from "./deepLink";
 import { DEEP_LINK_CONTEXT_MESSAGES } from "../constants/deepLink";
 
 /**
@@ -7,6 +8,23 @@ import { DEEP_LINK_CONTEXT_MESSAGES } from "../constants/deepLink";
  */
 export function findRawMessageIndex(messages: Message[], messageId: string): number {
   return messages.findIndex((message) => message.id === messageId);
+}
+
+/**
+ * Whether a loaded export can show the link: the conversation exists and, if the link
+ * names a message, that message is in it. A different export of the same conversation
+ * (e.g. an older one) may lack the message.
+ */
+export function canShowDeepLink(
+  conversations: Conversation[],
+  target: DeepLinkTarget,
+): boolean {
+  const conversation = conversations.find((c) => c.id === target.conversationId);
+  if (!conversation) return false;
+  return (
+    target.messageId === null ||
+    findRawMessageIndex(conversation.MessageList, target.messageId) !== -1
+  );
 }
 
 /**
