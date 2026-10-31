@@ -2,12 +2,16 @@
 
 Builds links of the form
 
-    <base>?conversationId=<Conversation.id>&messageId=<Message.id>
+    <base>#conversationId=<Conversation.id>&messageId=<Message.id>
 
 that open SkypeLens on the exact original message. Only identifiers go into the URL,
 never message content or quotations. The links work independently of the order in
 which the analysis pipeline extracted messages, because they use the original Skype
 IDs rather than synthetic keys such as ``m0000123``.
+
+report.html links open in one browser tab named ``skypelens``. The identifiers are in
+the URL hash, so after the first click (where the export is loaded) every further
+click only changes the hash of that tab: no reload, and no re-uploading the export.
 
 Use it from skype_analyze.py (see "Deep Links and Message Permalinks" in README.md),
 or run it standalone to add ``skypelens_url`` to an existing findings.json/findings.csv:
@@ -34,6 +38,8 @@ DEFAULT_SKYPELENS_BASE_URL = "http://localhost:5173/"
 SKYPELENS_BASE_URL_ENV = "SKYPELENS_BASE_URL"
 CONVERSATION_ID_PARAM = "conversationId"
 MESSAGE_ID_PARAM = "messageId"
+# Browser tab that all report links open in, so the loaded export is reused
+SKYPELENS_WINDOW_NAME = "skypelens"
 
 
 def build_skypelens_url(
@@ -43,8 +49,10 @@ def build_skypelens_url(
 ) -> str:
     """Return the canonical SkypeLens URL for a conversation, optionally at a message.
 
-    ``base_url`` may include a port, a sub-path (e.g. GitHub Pages) and unrelated query
-    parameters, which are kept. Any fragment is dropped.
+    The identifiers go in the URL hash. ``base_url`` may include a port, a sub-path
+    (e.g. GitHub Pages) and unrelated query parameters, which are kept. Use exactly the
+    address SkypeLens is opened at: links reuse an open SkypeLens tab without reloading
+    only when everything before the ``#`` matches.
     """
     if not conversation_id:
         raise ValueError("conversation_id is required")
@@ -55,18 +63,20 @@ def build_skypelens_url(
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise ValueError(f"base_url must be an absolute http(s) URL, got {base_url!r}")
 
-    params = [
+    # Older links put the identifiers in the query; drop them from the base
+    kept = [
         (key, value)
         for key, value in parse_qsl(parts.query, keep_blank_values=True)
         if key not in (CONVERSATION_ID_PARAM, MESSAGE_ID_PARAM)
     ]
-    params.append((CONVERSATION_ID_PARAM, str(conversation_id)))
+    link = [(CONVERSATION_ID_PARAM, str(conversation_id))]
     if message_id is not None:
-        params.append((MESSAGE_ID_PARAM, str(message_id)))
+        link.append((MESSAGE_ID_PARAM, str(message_id)))
 
     # quote(safe="") percent-encodes ":", "@", "+", "/", "&", "=", "#" and spaces
-    query = urlencode(params, quote_via=quote, safe="")
-    return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", query, ""))
+    query = urlencode(kept, quote_via=quote, safe="")
+    fragment = urlencode(link, quote_via=quote, safe="")
+    return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", query, fragment))
 
 
 def resolve_conversation_id(data: Any, explicit: Optional[str] = None) -> str:
@@ -141,13 +151,17 @@ def history_href(finding: Mapping[str, Any]) -> Optional[str]:
 
 
 def finding_links_html(finding: Mapping[str, Any]) -> str:
-    """HTML for report.html: "View in SkypeLens" plus the history.html fallback."""
+    """HTML for report.html: "View in SkypeLens" plus the history.html fallback.
+
+    All SkypeLens links target the same named tab. No rel="noopener"/"noreferrer":
+    either would make the browser forget that tab and open a new one per click.
+    """
     links = []
     if finding.get("skypelens_url"):
         links.append(
-            '<a class="skypelens-link" href="{}" target="_blank" '
-            'rel="noopener noreferrer">View in SkypeLens</a>'.format(
-                html.escape(str(finding["skypelens_url"]), quote=True)
+            '<a class="skypelens-link" href="{}" target="{}">View in SkypeLens</a>'.format(
+                html.escape(str(finding["skypelens_url"]), quote=True),
+                SKYPELENS_WINDOW_NAME,
             )
         )
     fallback = history_href(finding)

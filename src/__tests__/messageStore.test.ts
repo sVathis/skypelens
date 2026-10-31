@@ -158,22 +158,26 @@ describe("replacing the export", () => {
 describe("applyLocationToStore", () => {
   it("follows the URL as it changes (Back/Forward)", () => {
     store().setExportData(createSyntheticExport(COUNT).exportData);
-    const url = (n: number) =>
-      `?conversationId=${encodeURIComponent(CONVERSATION_ID)}&messageId=${messageIdFor(n)}`;
+    const params = (n: number) =>
+      `conversationId=${encodeURIComponent(CONVERSATION_ID)}&messageId=${messageIdFor(n)}`;
 
-    applyLocationToStore(url(100));
+    applyLocationToStore({ search: "", hash: `#${params(100)}` });
     expect(store().navigationTarget?.messageId).toBe(messageIdFor(100));
 
-    applyLocationToStore(url(200));
+    applyLocationToStore({ search: "", hash: `#${params(200)}` });
     expect(store().navigationTarget?.messageId).toBe(messageIdFor(200));
 
-    applyLocationToStore("");
+    // Older query-form links still work
+    applyLocationToStore({ search: `?${params(300)}`, hash: "" });
+    expect(store().navigationTarget?.messageId).toBe(messageIdFor(300));
+
+    applyLocationToStore({ search: "", hash: "" });
     expect(store().navigationTarget).toBeNull();
     expect(store().navigationError).toBeNull();
   });
 
   it("reports malformed links", () => {
-    applyLocationToStore("?messageId=1");
+    applyLocationToStore({ search: "", hash: "#messageId=1" });
     expect(store().navigationError?.kind).toBe("invalid-link");
     expect(store().requestedDeepLink).toBeNull();
   });

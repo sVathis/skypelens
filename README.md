@@ -99,24 +99,26 @@ Every message has a stable link, so reports, notes or other tools can point stra
 ### Canonical URL format
 
 ```
-<SkypeLens base URL>?conversationId=<Conversation.id>&messageId=<Message.id>
+<SkypeLens base URL>#conversationId=<Conversation.id>&messageId=<Message.id>
 ```
 
-- `conversationId` is the conversation's `id` from the export and `messageId` is the original message `id`, both percent-encoded (standard URL query encoding).
+- `conversationId` is the conversation's `id` from the export and `messageId` is the original message `id`, both percent-encoded (standard URL encoding).
 - `messageId` is optional; without it the link opens the conversation.
 - The base URL is wherever SkypeLens is served: `http://localhost:5173/` in development, `https://thongtech.github.io/skypelens/` on GitHub Pages, or any other host, port or sub-path.
 - Links contain identifiers only, never message text.
+- The identifiers are after the `#`, so following a link in an open SkypeLens tab doesn't reload the page and the loaded export stays in memory.
+- Older links with the identifiers after `?` (`?conversationId=…&messageId=…`) still work; SkypeLens rewrites them to the `#` form when it opens them.
 
 Examples:
 
 ```
-http://localhost:5173/?conversationId=8%3Alive%3A.cid.0123456789abcdef&messageId=1700000000001
-https://thongtech.github.io/skypelens/?conversationId=19%3Aabc.def_01%40thread.skype&messageId=1700000000002
+http://localhost:5173/#conversationId=8%3Alive%3A.cid.0123456789abcdef&messageId=1700000000001
+https://thongtech.github.io/skypelens/#conversationId=19%3Aabc.def_01%40thread.skype&messageId=1700000000002
 ```
 
 ### Opening a link
 
-- **Export already loaded in this tab** (Back/Forward, or a link handled in place): SkypeLens selects the conversation, loads as much history as needed, scrolls the message to the centre and highlights it, with the surrounding messages around it. Any active search is cleared so it can't hide the target.
+- **Export already loaded in this tab** (a report link aimed at this tab, a link pasted into its address bar, or Back/Forward): SkypeLens selects the conversation, loads as much history as needed, scrolls the message to the centre and highlights it, with the surrounding messages around it. Any active search is cleared so it can't hide the target.
 - **Fresh tab, nothing loaded**: SkypeLens keeps nothing between visits, so it shows the upload screen with a note about the link. Load the export and it jumps to the message automatically.
 - **Fresh tab while another SkypeLens tab has the export loaded**: the link is handed to a tab whose export contains that message (not just the conversation), which navigates to it. Only the two IDs are passed between tabs; the export itself never leaves the tab it was loaded into.
 - If the conversation or message is not in the loaded export, SkypeLens says so instead of opening something else. **Load another export** in that message lets you load the right export (e.g. a newer one); the link then completes.
@@ -125,7 +127,7 @@ https://thongtech.github.io/skypelens/?conversationId=19%3Aabc.def_01%40thread.s
 
 ### Copying a link
 
-Hover a message and click the 🔗 icon next to it ("Copy link to message"). The canonical URL is copied to the clipboard. It opens the same message after a reload or in another browser, once the same export is loaded.
+Hover a message and click the 🔗 icon next to it ("Copy link to message"). The canonical URL is copied to the clipboard. Pasted into the address bar of the same tab, it jumps there without reloading; in a reload or another browser it opens the same message once the same export is loaded.
 
 ### Links from the Python analysis reports
 
@@ -137,7 +139,7 @@ Hover a message and click the 🔗 icon next to it ("Copy link to message"). The
 python tools/skypelens_links.py --findings out/findings.json --csv out/findings.csv --conversation-json conversation.json
 ```
 
-This adds a `skypelens_url` field/column. Use `--skypelens-base-url` (or the `SKYPELENS_BASE_URL` environment variable) for a non-default SkypeLens location, and `--skypelens-conversation-id` when the JSON contains several conversations.
+This adds a `skypelens_url` field/column. Set the base URL to exactly the address you open SkypeLens at (same host, port and path): a link reuses an open SkypeLens tab without reloading only if everything before the `#` matches. Use `--skypelens-base-url` (or the `SKYPELENS_BASE_URL` environment variable) for a non-default SkypeLens location, and `--skypelens-conversation-id` when the JSON contains several conversations.
 
 **Integrate into `skype_analyze.py`** so `report.html` and `report.md` get a "View in SkypeLens" link per finding, next to the existing `history.html#m…` link (which is kept as a fallback). Copy `tools/skypelens_links.py` next to `skype_analyze.py`, then:
 
@@ -161,6 +163,16 @@ markdown_links = finding_links_markdown(finding)  # report.md
 ```
 
 Write `skypelens_url` to `findings.json`/`findings.csv` too if you want it there. `resolve_conversation_id` accepts a full export, an extracted single-conversation JSON, a bare conversation object or a list of messages (via their `conversationid` field).
+
+**Clicking through findings without re-uploading.** In `report.html`, every "View in SkypeLens" link opens in the same browser tab, named `skypelens`:
+
+1. The first click opens that tab. Load the export there once.
+2. Every later click goes back to that tab and only changes the part after `#`, so SkypeLens jumps to the new message immediately, without reloading or asking for the export again.
+
+For this to work:
+- Open SkypeLens from the first report link rather than in a tab you opened yourself. Browsers only let a page reuse a tab it opened.
+- The links must not have `rel="noopener"` or `rel="noreferrer"` (the helper leaves them out); either makes every click open a new tab.
+- `report.md` viewers can't target a named tab, so Markdown links open a new tab each time. If another SkypeLens tab has the export loaded, the new tab hands the link over to it.
 
 The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs.
 

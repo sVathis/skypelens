@@ -1,42 +1,48 @@
 {
-  "description": "Shared SkypeLens deep-link contract. tools/test_skypelens_links.py checks that the Python helper produces exactly these URLs; src/__tests__/deepLink.test.ts checks that SkypeLens parses them back to the same identifiers.",
+  "description": "Shared SkypeLens deep-link contract (identifiers in the URL hash). tools/test_skypelens_links.py checks that the Python helper produces exactly these URLs; src/__tests__/deepLink.test.ts checks that SkypeLens parses them back to the same identifiers.",
   "default_base_url": "http://localhost:5173/",
   "cases": [
     {
       "base_url": "http://localhost:5173/",
       "conversation_id": "8:live:.cid.0123456789abcdef",
       "message_id": "1700000000001",
-      "url": "http://localhost:5173/?conversationId=8%3Alive%3A.cid.0123456789abcdef&messageId=1700000000001"
+      "url": "http://localhost:5173/#conversationId=8%3Alive%3A.cid.0123456789abcdef&messageId=1700000000001"
     },
     {
       "base_url": "http://localhost:5173",
       "conversation_id": "19:synthetic.thread_01@thread.skype",
       "message_id": "1700000000002",
-      "url": "http://localhost:5173/?conversationId=19%3Asynthetic.thread_01%40thread.skype&messageId=1700000000002"
+      "url": "http://localhost:5173/#conversationId=19%3Asynthetic.thread_01%40thread.skype&messageId=1700000000002"
     },
     {
       "base_url": "https://example.github.io/skypelens/",
       "conversation_id": "28:concierge",
       "message_id": "msg.with.periods:and:colons",
-      "url": "https://example.github.io/skypelens/?conversationId=28%3Aconcierge&messageId=msg.with.periods%3Aand%3Acolons"
+      "url": "https://example.github.io/skypelens/#conversationId=28%3Aconcierge&messageId=msg.with.periods%3Aand%3Acolons"
     },
     {
       "base_url": "http://127.0.0.1:4173/viewer/",
       "conversation_id": "8:live:jane+doe smith",
       "message_id": "id&with=reserved#chars?%/",
-      "url": "http://127.0.0.1:4173/viewer/?conversationId=8%3Alive%3Ajane%2Bdoe%20smith&messageId=id%26with%3Dreserved%23chars%3F%25%2F"
+      "url": "http://127.0.0.1:4173/viewer/#conversationId=8%3Alive%3Ajane%2Bdoe%20smith&messageId=id%26with%3Dreserved%23chars%3F%25%2F"
     },
     {
       "base_url": "http://192.168.1.10:8080/tools/skypelens/index.html?theme=dark#old-fragment",
       "conversation_id": "8:live:ελληνικά",
       "message_id": "📎-42",
-      "url": "http://192.168.1.10:8080/tools/skypelens/index.html?theme=dark&conversationId=8%3Alive%3A%CE%B5%CE%BB%CE%BB%CE%B7%CE%BD%CE%B9%CE%BA%CE%AC&messageId=%F0%9F%93%8E-42"
+      "url": "http://192.168.1.10:8080/tools/skypelens/index.html?theme=dark#conversationId=8%3Alive%3A%CE%B5%CE%BB%CE%BB%CE%B7%CE%BD%CE%B9%CE%BA%CE%AC&messageId=%F0%9F%93%8E-42"
     },
     {
       "base_url": "http://localhost:5173/",
       "conversation_id": "48:notes",
       "message_id": null,
-      "url": "http://localhost:5173/?conversationId=48%3Anotes"
+      "url": "http://localhost:5173/#conversationId=48%3Anotes"
+    },
+    {
+      "base_url": "http://localhost:5173/?conversationId=old&messageId=1",
+      "conversation_id": "8:live:.cid.replaced",
+      "message_id": "1700000000003",
+      "url": "http://localhost:5173/#conversationId=8%3Alive%3A.cid.replaced&messageId=1700000000003"
     }
   ]
 }
