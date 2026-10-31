@@ -18,6 +18,20 @@ interface UseMessageProcessingProps {
   ) => void;
 }
 
+interface ProcessedState {
+  /** Which conversation and perspective `messages` belong to (see getProcessingKey). */
+  key: string | null;
+  messages: ProcessedMessage[];
+  /** Number of raw messages (from the start of MessageList) that `messages` covers. */
+  rawCount: number;
+}
+
+const EMPTY_STATE: ProcessedState = { key: null, messages: [], rawCount: 0 };
+
+export function getProcessingKey(conversationId: string, swapped: boolean): string {
+  return `${swapped ? "swapped" : "normal"}:${conversationId}`;
+}
+
 /**
  * Processes messages for display with caching support.
  * Caches processed messages to avoid reprocessing on re-renders.
@@ -30,9 +44,7 @@ export function useMessageProcessing({
   getProcessedMessages,
   cacheProcessedMessages,
 }: UseMessageProcessingProps) {
-  const [processedMessages, setProcessedMessages] = useState<
-    ProcessedMessage[]
-  >([]);
+  const [processedState, setProcessedState] = useState<ProcessedState>(EMPTY_STATE);
   const [loadedMessageCount, setLoadedMessageCount] = useState(
     INITIAL_MESSAGE_COUNT,
   );
@@ -49,42 +61,26 @@ export function useMessageProcessing({
       !conversation?.MessageList ||
       !exportData?.userId
     ) {
-      startTransition(() => setProcessedMessages([]));
+      startTransition(() => setProcessedState(EMPTY_STATE));
       return;
     }
 
+    const key = getProcessingKey(conversation.id, swapped);
     const cachedAll = getProcessedMessages(conversation.id, swapped);
     const totalMessages = conversation.MessageList.length;
     const messagesToLoad = Math.min(loadedMessageCount, totalMessages);
 
-    if (cachedAll && cachedAll.length >= totalMessages) {
-      startTransition(() =>
-        setProcessedMessages(cachedAll.slice(0, messagesToLoad)),
-      );
-      return;
-    }
-
+    // Processing skips some raw messages, so the first N processed messages always
+    // cover at least the first N raw messages.
     if (cachedAll && cachedAll.length >= messagesToLoad) {
       startTransition(() =>
-        setProcessedMessages(cachedAll.slice(0, messagesToLoad)),
+        setProcessedState({
+          key,
+          messages: cachedAll.slice(0, messagesToLoad),
+          rawCount: messagesToLoad,
+        }),
       );
       return;
-    }
-
-    if (cachedAll && cachedAll.length > 0 && cachedAll.length < messagesToLoad) {
-      const timeoutId = setTimeout(() => {
-        const processed = processMessages(
-          conversation.MessageList,
-          exportData.userId,
-          swapped,
-          exportData.mediaFiles,
-          messagesToLoad,
-        );
-        cacheProcessedMessages(conversation.id, processed, swapped);
-        startTransition(() => setProcessedMessages(processed));
-      }, 0);
-
-      return () => clearTimeout(timeoutId);
     }
 
     const timeoutId = setTimeout(() => {
@@ -96,7 +92,9 @@ export function useMessageProcessing({
         messagesToLoad,
       );
       cacheProcessedMessages(conversation.id, processed, swapped);
-      startTransition(() => setProcessedMessages(processed));
+      startTransition(() =>
+        setProcessedState({ key, messages: processed, rawCount: messagesToLoad }),
+      );
     }, 0);
 
     return () => clearTimeout(timeoutId);
@@ -112,9 +110,10 @@ export function useMessageProcessing({
   ]);
 
   return {
-    processedMessages,
+    processedMessages: processedState.messages,
+    processedKey: processedState.key,
+    processedRawCount: processedState.rawCount,
     loadedMessageCount,
     setLoadedMessageCount,
   };
 }
-

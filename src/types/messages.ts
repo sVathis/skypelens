@@ -75,6 +75,8 @@ export interface ProcessedMessage {
   isOwner: boolean;
   originalMessageType: string;
   mediaUrl?: string;
+  /** Original message IDs folded into this displayed message (e.g. translation pairs). */
+  mergedIds?: string[];
 }
 
 export interface MediaMetadata {

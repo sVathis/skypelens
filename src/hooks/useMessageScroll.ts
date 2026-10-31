@@ -7,6 +7,15 @@ import {
   MAX_SCROLL_FRAMES,
 } from "../constants/messages";
 
+/**
+ * Shared with deep-link navigation. While `active`, navigation owns the scroll position;
+ * `generation` changes with every navigation so earlier scroll work can detect it.
+ */
+export interface NavigationScrollLock {
+  active: boolean;
+  generation: number;
+}
+
 interface UseMessageScrollProps {
   scrollContainerRef: React.RefObject<HTMLDivElement>;
   conversation: Conversation | null;
@@ -15,12 +24,14 @@ interface UseMessageScrollProps {
   swapped: boolean;
   setLoadedMessageCount: (updater: (prev: number) => number) => void;
   setIsLoadingMore: (value: boolean) => void;
+  navigationLockRef: React.MutableRefObject<NavigationScrollLock>;
 }
 
 /**
  * Manages scroll behavior for the message view.
  * Handles auto-scroll to bottom on conversation open and scroll position restoration
  * when loading more messages. Waits for virtualizer to stabilize before scrolling.
+ * Defers to deep-link navigation whenever `navigationLockRef` is active.
  */
 export function useMessageScroll({
   scrollContainerRef,
@@ -30,6 +41,7 @@ export function useMessageScroll({
   swapped,
   setLoadedMessageCount,
   setIsLoadingMore,
+  navigationLockRef,
 }: UseMessageScrollProps) {
   const previousScrollHeightRef = useRef(0);
   const previousScrollTopRef = useRef(0);
@@ -52,10 +64,15 @@ export function useMessageScroll({
     let lastHeight = 0;
     let stableFrames = 0;
     let frameCount = 0;
+    const startGeneration = navigationLockRef.current.generation;
+    // A deep link started (or is running) since this scroll was scheduled
+    const navigationTookOver = () =>
+      navigationLockRef.current.active ||
+      navigationLockRef.current.generation !== startGeneration;
 
     const scrollToBottom = () => {
       const scrollContainer = scrollContainerRef.current;
-      if (!scrollContainer) {
+      if (!scrollContainer || navigationTookOver()) {
         return;
       }
 
@@ -73,7 +90,7 @@ export function useMessageScroll({
       // Scroll when height is stable or max frames reached (timeout fallback)
       if (stableFrames >= REQUIRED_STABLE_FRAMES || frameCount >= MAX_SCROLL_FRAMES) {
         const performScroll = () => {
-          if (scrollContainerRef.current) {
+          if (scrollContainerRef.current && !navigationTookOver()) {
             scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
           }
         };
@@ -86,7 +103,7 @@ export function useMessageScroll({
     };
 
     requestAnimationFrame(scrollToBottom);
-  }, [conversation, swapped, scrollContainerRef]);
+  }, [conversation, swapped, scrollContainerRef, navigationLockRef]);
 
   const loadMoreMessages = useCallback(() => {
     if (!conversation || !scrollContainerRef.current || isLoadingMore) return;
@@ -110,7 +127,12 @@ export function useMessageScroll({
    */
   const handleScroll = useCallback(() => {
     const scrollContainer = scrollContainerRef.current;
-    if (!scrollContainer || isLoadingMore || !conversation) {
+    if (
+      !scrollContainer ||
+      isLoadingMore ||
+      !conversation ||
+      navigationLockRef.current.active
+    ) {
       return;
     }
 
@@ -130,6 +152,7 @@ export function useMessageScroll({
     loadedMessageCount,
     loadMoreMessages,
     scrollContainerRef,
+    navigationLockRef,
   ]);
 
   useEffect(() => {
@@ -167,6 +190,14 @@ export function useMessageScroll({
         return;
       }
 
+      // Deep-link navigation now owns the scroll position; don't restore over it
+      if (navigationLockRef.current.active) {
+        previousScrollHeightRef.current = 0;
+        previousScrollTopRef.current = 0;
+        startTransition(() => setIsLoadingMore(false));
+        return;
+      }
+
       const currentHeight = scrollContainer.scrollHeight;
       frameCount++;
 
@@ -193,6 +224,6 @@ export function useMessageScroll({
     };
 
     requestAnimationFrame(restoreScroll);
-  }, [isLoadingMore, setIsLoadingMore, scrollContainerRef]);
+  }, [isLoadingMore, setIsLoadingMore, scrollContainerRef, navigationLockRef]);
 }
 

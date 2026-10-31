@@ -29,9 +29,11 @@ import { debugLog } from "../../utils/debug";
 
 interface FileUploadProps {
   onFileProcessed: (data: SkypeExport) => void;
+  /** Shown above the upload options, e.g. to explain a pending deep link. */
+  notice?: React.ReactNode;
 }
 
-export function FileUpload({ onFileProcessed }: FileUploadProps) {
+export function FileUpload({ onFileProcessed, notice }: FileUploadProps) {
   const [progress, setProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -237,6 +239,8 @@ export function FileUpload({ onFileProcessed }: FileUploadProps) {
           Choose how you want to upload your Skype export
         </Text>
       </Stack>
+
+      {notice}
 
       {error && (
         <Alert

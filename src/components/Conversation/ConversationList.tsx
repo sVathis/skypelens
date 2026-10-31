@@ -4,8 +4,8 @@ import {
   useConversations,
   useSelectedConversationId,
   useExportData,
-  useSelectConversation,
 } from "../../store/messageStore";
+import { useOpenConversation } from "../../hooks/useDeepLinkNavigation";
 import { formatRelativeTime } from "../../utils/dateFormat";
 import { getMessagePreview } from "../../utils/messageProcessor";
 import { cleanDisplayName } from "../../utils/displayName";
@@ -101,7 +101,7 @@ const ConversationItem = memo(function ConversationItem({
 
 export function ConversationList({ searchQuery }: ConversationListProps) {
 	const conversations = useConversations();
-	const selectConversation = useSelectConversation();
+	const openConversation = useOpenConversation();
 	const selectedConversationId = useSelectedConversationId();
 	const exportData = useExportData();
 
@@ -131,7 +131,7 @@ export function ConversationList({ searchQuery }: ConversationListProps) {
 					conversation={conversation}
 					isSelected={conversation.id === selectedConversationId}
 					userId={exportData?.userId || ""}
-					onSelect={selectConversation}
+					onSelect={openConversation}
 				/>
 			))}
 		</Stack>
