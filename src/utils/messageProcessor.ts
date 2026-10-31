@@ -86,29 +86,36 @@ function handleTranslation(
   // Owner's messages: show original (next RichText), skip Translation metadata
   if (isFromUserId && nextMessage?.messagetype === "RichText") {
     skipIds.add(nextMessage.id);
-    return createBaseMessage(
+    const processed = createBaseMessage(
       { ...nextMessage, from: message.from },
       context,
       parseMessageContent(nextMessage.content),
       "text",
     );
+    // Keep the Translation message traceable: links to it resolve to this bubble
+    processed.mergedIds = [message.id];
+    return processed;
   }
 
   // Others' messages: extract translated text from Translation message's JSON content
   const translatedText = parseTranslationContent(message.content);
   const content = translatedText || message.content;
 
-  // Skip the following RichText message (contains original in sender's language)
-  if (nextMessage?.messagetype === "RichText") {
-    skipIds.add(nextMessage.id);
-  }
-
-  return createBaseMessage(
+  const processed = createBaseMessage(
     message,
     context,
     parseMessageContent(content),
     "text",
   );
+
+  // Skip the following RichText message (contains original in sender's language),
+  // but keep it traceable: links to it resolve to this bubble
+  if (nextMessage?.messagetype === "RichText") {
+    skipIds.add(nextMessage.id);
+    processed.mergedIds = [nextMessage.id];
+  }
+
+  return processed;
 }
 
 function handleMediaMessage(

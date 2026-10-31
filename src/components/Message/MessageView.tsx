@@ -1,11 +1,29 @@
-import { Stack, Text, Box } from "@mantine/core";
-import { useRef, useMemo, useState, useCallback, useEffect } from "react";
+import { Stack, Text, Box, Alert, Center, Group, Loader, Paper } from "@mantine/core";
+import { IconInfoCircle } from "@tabler/icons-react";
+import {
+  useRef,
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+} from "react";
 import { useMessageStore, useExportData } from "../../store/messageStore";
 import { MessageHeader } from "./MessageHeader";
-import { MessageList } from "./MessageList";
+import {
+  MessageList,
+  type DeepLinkHighlight,
+  type MessageScrollRequest,
+} from "./MessageList";
 import { MessageSearch } from "./MessageSearch";
-import { useMessageProcessing } from "../../hooks/useMessageProcessing";
-import { useMessageScroll } from "../../hooks/useMessageScroll";
+import {
+  getProcessingKey,
+  useMessageProcessing,
+} from "../../hooks/useMessageProcessing";
+import {
+  useMessageScroll,
+  type NavigationScrollLock,
+} from "../../hooks/useMessageScroll";
 import { cleanDisplayName } from "../../utils/displayName";
 import { MediaViewer } from "./MediaViewer";
 import { useMediaGallery } from "../../hooks/useMediaGallery";
@@ -14,6 +32,12 @@ import {
   findMatchingMessageIndices,
   filterMessages,
 } from "../../utils/messageSearch";
+import {
+  getRequiredMessageCount,
+  resolveDisplayedMessage,
+} from "../../utils/messageLocator";
+import { buildDeepLinkUrl } from "../../utils/deepLink";
+import { copyText } from "../../utils/clipboard";
 
 const EMPTY_STATE_STYLE: React.CSSProperties = {
   backgroundColor:
@@ -40,6 +64,24 @@ export function MessageView() {
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isLoadingAll, setIsLoadingAll] = useState(false);
+  const [dismissedNoticeRequestId, setDismissedNoticeRequestId] = useState<
+    number | null
+  >(null);
+  const navigationTarget = useMessageStore((state) => state.navigationTarget);
+  const completeNavigation = useMessageStore((state) => state.completeNavigation);
+  const renavigate = useMessageStore((state) => state.renavigate);
+  const navigationLockRef = useRef<NavigationScrollLock>({
+    active: false,
+    generation: 0,
+  });
+
+  // Deep-link target in the open conversation, if any
+  const activeTarget =
+    conversation && navigationTarget?.conversationId === conversation.id
+      ? navigationTarget
+      : null;
+  const pendingRequestId =
+    activeTarget?.status === "pending" ? activeTarget.requestId : null;
 
   const userDisplayName = useMemo(() => {
     return exportData?.userId
@@ -61,8 +103,13 @@ export function MessageView() {
     [swapped, userDisplayName, conversationDisplayName],
   );
 
-  const { processedMessages, loadedMessageCount, setLoadedMessageCount } =
-    useMessageProcessing({
+  const {
+    processedMessages,
+    processedKey,
+    processedRawCount,
+    loadedMessageCount,
+    setLoadedMessageCount,
+  } = useMessageProcessing({
       conversation,
       exportData,
       swapped,
@@ -78,11 +125,23 @@ export function MessageView() {
     swapped,
     setLoadedMessageCount,
     setIsLoadingMore,
+    navigationLockRef,
   });
+
+  // Layout effects run before the passive scroll effects of the same commit, so the
+  // auto-scroll-to-bottom and load-more logic already see an active navigation.
+  useLayoutEffect(() => {
+    navigationLockRef.current.active = pendingRequestId !== null;
+    if (pendingRequestId !== null) {
+      navigationLockRef.current.generation = pendingRequestId;
+    }
+  }, [pendingRequestId]);
 
   const handleRoleSwap = () => {
     if (conversation) {
       toggleRoleSwap(conversation.id);
+      // Stay on the linked message instead of jumping to the bottom
+      if (activeTarget) renavigate();
     }
   };
 
@@ -98,6 +157,99 @@ export function MessageView() {
     setIsSearchOpen(false);
     setIsLoadingAll(false);
   }, [conversation?.id, swapped]);
+
+  /**
+   * Deep link step 1: make sure the processed range includes the target (plus context)
+   * and clear any search filter that could hide it. Runs after the reset effects above,
+   * so it wins over the reset to the initial message count when the conversation changes.
+   */
+  const targetRawIndex = activeTarget?.rawIndex;
+  useEffect(() => {
+    if (pendingRequestId === null || targetRawIndex === undefined || !conversation) {
+      return;
+    }
+    const required = getRequiredMessageCount(
+      targetRawIndex,
+      conversation.MessageList.length,
+    );
+    setLoadedMessageCount((prev) => Math.max(prev, required));
+    setSearchQuery("");
+    setCurrentMatchIndex(0);
+  }, [pendingRequestId, targetRawIndex, conversation, setLoadedMessageCount]);
+
+  // Deep link step 2: find the displayed bubble that represents the original message
+  const isProcessedForView =
+    conversation !== null &&
+    processedKey === getProcessingKey(conversation.id, swapped);
+  const targetResolution = useMemo(() => {
+    if (!activeTarget || !conversation || !isProcessedForView) return null;
+    return resolveDisplayedMessage(
+      conversation.MessageList,
+      activeTarget.rawIndex,
+      processedMessages,
+      processedRawCount,
+    );
+  }, [activeTarget, conversation, isProcessedForView, processedMessages, processedRawCount]);
+
+  const targetDisplayId =
+    targetResolution && targetResolution.status !== "loading"
+      ? targetResolution.displayId
+      : null;
+
+  // Deep link step 3: the message list scrolls to the bubble and reports completion
+  const scrollRequest = useMemo<MessageScrollRequest | null>(
+    () =>
+      pendingRequestId !== null && targetDisplayId !== null
+        ? { requestId: pendingRequestId, messageId: targetDisplayId }
+        : null,
+    [pendingRequestId, targetDisplayId],
+  );
+
+  const deepLinkHighlight = useMemo<DeepLinkHighlight | null>(
+    () =>
+      activeTarget && targetDisplayId !== null
+        ? {
+            requestId: activeTarget.requestId,
+            messageId: targetDisplayId,
+            approximate: targetResolution?.status === "hidden",
+            settled: activeTarget.status === "done",
+          }
+        : null,
+    [activeTarget, targetDisplayId, targetResolution?.status],
+  );
+
+  // Nothing displayed to scroll to: finish so normal scrolling resumes
+  const hasNothingToShow =
+    targetResolution?.status === "hidden" && targetResolution.displayId === null;
+  useEffect(() => {
+    if (pendingRequestId !== null && hasNothingToShow) {
+      completeNavigation(pendingRequestId);
+    }
+  }, [pendingRequestId, hasNothingToShow, completeNavigation]);
+
+  const navigationNotice = useMemo(() => {
+    if (!activeTarget || dismissedNoticeRequestId === activeTarget.requestId) {
+      return null;
+    }
+    if (targetResolution?.status === "merged") {
+      return "The linked message is part of a translation pair. SkypeLens shows the pair as one message, which is highlighted.";
+    }
+    if (targetResolution?.status === "hidden") {
+      return targetResolution.displayId
+        ? `The linked message (type "${targetResolution.messageType}") is not displayed by SkypeLens. The nearest displayed message is highlighted with a dashed outline instead.`
+        : `The linked message (type "${targetResolution.messageType}") is not displayed by SkypeLens.`;
+    }
+    return null;
+  }, [activeTarget, targetResolution, dismissedNoticeRequestId]);
+
+  const conversationId = conversation?.id;
+  const handleCopyMessageLink = useCallback(
+    (messageId: string) =>
+      conversationId
+        ? copyText(buildDeepLinkUrl({ conversationId, messageId }))
+        : Promise.resolve(false),
+    [conversationId],
+  );
 
   const matchingIndices = useMemo(() => {
     if (!searchQuery.trim()) return [];
@@ -319,12 +471,40 @@ export function MessageView() {
         />
       )}
 
+      {navigationNotice && activeTarget && (
+        <Alert
+          icon={<IconInfoCircle size={16} />}
+          color="yellow"
+          variant="light"
+          radius={0}
+          withCloseButton
+          onClose={() => setDismissedNoticeRequestId(activeTarget.requestId)}
+          style={{ flexShrink: 0 }}
+        >
+          {navigationNotice}
+        </Alert>
+      )}
+
       <Box
         ref={scrollContainerRef}
+        data-message-scroll-container
         h="100%"
         style={{ overflow: "auto", position: "relative" }}
         bg="light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8))"
       >
+        {pendingRequestId !== null && (
+          // Zero-height sticky wrapper: visible on top without shifting the rows
+          <div style={{ position: "sticky", top: 0, height: 0, zIndex: 20 }}>
+            <Center pt="sm">
+              <Paper withBorder shadow="sm" radius="xl" px="md" py={4}>
+                <Group gap="xs">
+                  <Loader size="xs" />
+                  <Text size="xs">Opening linked message…</Text>
+                </Group>
+              </Paper>
+            </Center>
+          </div>
+        )}
         <MessageList
           messages={processedMessages}
           isLoadingMore={isLoadingMore}
@@ -333,6 +513,10 @@ export function MessageView() {
           scrollContainerRef={scrollContainerRef}
           searchQuery={searchQuery}
           highlightedMessageIndex={highlightedMessageIndex}
+          scrollRequest={scrollRequest}
+          onScrollRequestComplete={completeNavigation}
+          deepLinkHighlight={deepLinkHighlight}
+          onCopyMessageLink={handleCopyMessageLink}
         />
       </Box>
     </Stack>

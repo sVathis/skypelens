@@ -9,6 +9,7 @@ import {
   MESSAGE_TEXT_STYLE,
 } from "../../constants/messageBubble";
 import { highlightSearchMatch } from "../../utils/messageSearch";
+import { CopyMessageLinkButton } from "./CopyMessageLinkButton";
 
 interface MessageBubbleProps {
   message: ProcessedMessage;
@@ -18,6 +19,7 @@ interface MessageBubbleProps {
   userDisplayName?: string;
   searchQuery?: string;
   isHighlighted?: boolean;
+  onCopyLink?: (messageId: string) => Promise<boolean>;
 }
 
 function MessageBubbleComponent({
@@ -28,6 +30,7 @@ function MessageBubbleComponent({
   userDisplayName = "You",
   searchQuery = "",
   isHighlighted = false,
+  onCopyLink,
 }: MessageBubbleProps) {
   const shouldShowName = !message.isOwner && showSender;
   const displayName =
@@ -36,6 +39,17 @@ function MessageBubbleComponent({
   const highlightedContent = searchQuery
     ? highlightSearchMatch(message.content, searchQuery)
     : message.content;
+
+  const copyLink = (placement: "start" | "end") =>
+    onCopyLink ? (
+      <CopyMessageLinkButton
+        messageId={message.id}
+        onCopy={onCopyLink}
+        placement={placement}
+      />
+    ) : null;
+  // Outside the bubble, on the side facing the middle of the conversation
+  const sidePlacement = message.isOwner ? "start" : "end";
 
   if (message.type === "media" && message.mediaUrl) {
     return (
@@ -51,7 +65,10 @@ function MessageBubbleComponent({
               {displayName}
             </Text>
           )}
-          <MediaMessage mediaId={message.mediaUrl} isOwner={message.isOwner} />
+          <Box pos="relative" maw="100%">
+            <MediaMessage mediaId={message.mediaUrl} isOwner={message.isOwner} />
+            {copyLink(sidePlacement)}
+          </Box>
           {showTimestamp && (
             <Text
               size="xs"
@@ -72,15 +89,18 @@ function MessageBubbleComponent({
   if (message.type === "system") {
     return (
       <Box ta="center" py={20} px={16}>
-        <Text
-          size="xs"
-          c="dimmed"
-          fw={500}
-          opacity={0.7}
-          dangerouslySetInnerHTML={{
-            __html: highlightedContent,
-          }}
-        />
+        <Box pos="relative" display="inline-block">
+          <Text
+            size="xs"
+            c="dimmed"
+            fw={500}
+            opacity={0.7}
+            dangerouslySetInnerHTML={{
+              __html: highlightedContent,
+            }}
+          />
+          {copyLink("end")}
+        </Box>
       </Box>
     );
   }
@@ -95,6 +115,7 @@ function MessageBubbleComponent({
           bg="light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6))"
           style={{
             display: "inline-block",
+            position: "relative",
             border:
               "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
             boxShadow: "0 1px 2px rgba(0, 0, 0, 0.1)",
@@ -108,6 +129,7 @@ function MessageBubbleComponent({
               __html: `📞 ${highlightedContent}`,
             }}
           />
+          {copyLink("end")}
         </Paper>
         {showTimestamp && (
           <Text
@@ -134,6 +156,7 @@ function MessageBubbleComponent({
           bg="rgba(255, 193, 7, 0.1)"
           style={{
             display: "inline-block",
+            position: "relative",
             border: "1px solid rgba(255, 193, 7, 0.3)",
             maxWidth: "80%",
             boxShadow: "0 1px 2px rgba(0, 0, 0, 0.1)",
@@ -150,6 +173,7 @@ function MessageBubbleComponent({
               }}
             />
           </Group>
+          {copyLink("end")}
         </Paper>
       </Box>
     );
@@ -199,6 +223,7 @@ function MessageBubbleComponent({
               __html: highlightedContent,
             }}
           />
+          {copyLink(sidePlacement)}
         </Paper>
         {showTimestamp && (
           <Text

@@ -29,9 +29,11 @@ import { debugLog } from "../../utils/debug";
 
 interface FileUploadProps {
   onFileProcessed: (data: SkypeExport) => void;
+  /** Shown above the upload options, e.g. to explain a pending deep link. */
+  notice?: React.ReactNode;
 }
 
-export function FileUpload({ onFileProcessed }: FileUploadProps) {
+export function FileUpload({ onFileProcessed, notice }: FileUploadProps) {
   const [progress, setProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,13 +57,9 @@ export function FileUpload({ onFileProcessed }: FileUploadProps) {
 
     try {
       // parseJsonFile handles both small and large files automatically
-      // For large files (>100MB), it uses streaming to avoid memory issues
+      // For large files (>100MB), it uses streaming to avoid memory issues.
+      // It also validates the structure and accepts single extracted conversations.
       const data = await parseJsonFile(file, setProgress);
-
-      // Validate that the file contains required Skype export structure
-      if (!data.userId || !data.conversations) {
-        throw new Error("Invalid Skype export file format");
-      }
 
       debugLog("[FileUpload] File processed successfully:", {
         userId: data.userId,
@@ -89,10 +87,6 @@ export function FileUpload({ onFileProcessed }: FileUploadProps) {
       // parseDirectoryFiles extracts messages.json and builds a map of media files
       // Media files are indexed by their ID for efficient lookup during message rendering
       const data = await parseDirectoryFiles(Array.from(files), setProgress);
-
-      if (!data.userId || !data.conversations) {
-        throw new Error("Invalid Skype export directory format");
-      }
 
       debugLog("[FileUpload] Directory processed successfully:", {
         userId: data.userId,
@@ -238,6 +232,8 @@ export function FileUpload({ onFileProcessed }: FileUploadProps) {
         </Text>
       </Stack>
 
+      {notice}
+
       {error && (
         <Alert
           icon={<IconAlertCircle size={16} />}
@@ -285,7 +281,7 @@ export function FileUpload({ onFileProcessed }: FileUploadProps) {
                     Upload messages.json File
                   </Text>
                   <Text size="sm" c="dimmed">
-                    For conversations only (no media files)
+                    Full export or a single extracted conversation (no media files)
                   </Text>
                 </Stack>
               </Group>

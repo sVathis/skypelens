@@ -88,9 +88,81 @@ SkypeLens intelligently processes Skype's built-in translation feature:
    </div>
 
 2. **Choose your upload method:**
-   - **Conversations only** – Drag and drop `messages.json` or click to select it
+   - **Conversations only** – Drag and drop `messages.json` (or a single extracted conversation JSON with `id` and `MessageList`) or click to select it
    - **Full media support** – Click "Select Export Directory" and choose the entire extracted Skype export folder
 3. Browse your conversations with the familiar Skype interface!
+
+## 🔗 Deep Links and Message Permalinks
+
+Every message has a stable link, so reports, notes or other tools can point straight at it.
+
+### Canonical URL format
+
+```
+<SkypeLens base URL>?conversationId=<Conversation.id>&messageId=<Message.id>
+```
+
+- `conversationId` is the conversation's `id` from the export and `messageId` is the original message `id`, both percent-encoded (standard URL query encoding).
+- `messageId` is optional; without it the link opens the conversation.
+- The base URL is wherever SkypeLens is served: `http://localhost:5173/` in development, `https://thongtech.github.io/skypelens/` on GitHub Pages, or any other host, port or sub-path.
+- Links contain identifiers only, never message text.
+
+Examples:
+
+```
+http://localhost:5173/?conversationId=8%3Alive%3A.cid.0123456789abcdef&messageId=1700000000001
+https://thongtech.github.io/skypelens/?conversationId=19%3Aabc.def_01%40thread.skype&messageId=1700000000002
+```
+
+### Opening a link
+
+- **Export already loaded in this tab** (Back/Forward, or a link handled in place): SkypeLens selects the conversation, loads as much history as needed, scrolls the message to the centre and highlights it, with the surrounding messages around it. Any active search is cleared so it can't hide the target.
+- **Fresh tab, nothing loaded**: SkypeLens keeps nothing between visits, so it shows the upload screen with a note about the link. Load the export and it jumps to the message automatically.
+- **Fresh tab while another SkypeLens tab has the export loaded**: the link is handed to a tab whose export contains that message (not just the conversation), which navigates to it. Only the two IDs are passed between tabs; the export itself never leaves the tab it was loaded into.
+- If the conversation or message is not in the loaded export, SkypeLens says so instead of opening something else. **Load another export** in that message lets you load the right export (e.g. a newer one); the link then completes.
+- If the linked message is one SkypeLens folds into another bubble (a translation pair), that bubble is highlighted and a note explains why. If it is a message SkypeLens doesn't display (e.g. an album placeholder), the nearest displayed message gets a dashed highlight and a note.
+- Clicking a conversation in the sidebar records it in browser history, so Back returns to the previous conversation or linked message.
+
+### Copying a link
+
+Hover a message and click the 🔗 icon next to it ("Copy link to message"). The canonical URL is copied to the clipboard. It opens the same message after a reload or in another browser, once the same export is loaded.
+
+### Links from the Python analysis reports
+
+[`tools/skypelens_links.py`](tools/skypelens_links.py) builds these URLs for findings produced by an analysis pipeline such as `skype_analyze.py` (findings with `message_key`, `skype_id`, `source_index`, `source_url`, …). It uses the original Skype IDs (`skype_id`), not the generated `m0000123` keys, so links don't depend on the pipeline's extraction order. It uses only the standard library and makes no network calls.
+
+**Add links to existing outputs** (no re-analysis):
+
+```bash
+python tools/skypelens_links.py --findings out/findings.json --csv out/findings.csv --conversation-json conversation.json
+```
+
+This adds a `skypelens_url` field/column. Use `--skypelens-base-url` (or the `SKYPELENS_BASE_URL` environment variable) for a non-default SkypeLens location, and `--skypelens-conversation-id` when the JSON contains several conversations.
+
+**Integrate into `skype_analyze.py`** so `report.html` and `report.md` get a "View in SkypeLens" link per finding, next to the existing `history.html#m…` link (which is kept as a fallback). Copy `tools/skypelens_links.py` next to `skype_analyze.py`, then:
+
+```python
+from skypelens_links import (
+    add_cli_arguments, add_skypelens_links, finding_links_html,
+    finding_links_markdown, resolve_conversation_id,
+)
+
+# 1. Argument parsing
+add_cli_arguments(parser)  # --skypelens-base-url, --skypelens-conversation-id
+
+# 2. After loading the conversation JSON and the findings
+#    (also on the --report-only path: this is pure string building, no API calls)
+conversation_id = resolve_conversation_id(conversation_json, args.skypelens_conversation_id)
+add_skypelens_links(findings, conversation_id, args.skypelens_base_url)
+
+# 3. When rendering each finding
+html_links = finding_links_html(finding)          # report.html
+markdown_links = finding_links_markdown(finding)  # report.md
+```
+
+Write `skypelens_url` to `findings.json`/`findings.csv` too if you want it there. `resolve_conversation_id` accepts a full export, an extracted single-conversation JSON, a bare conversation object or a list of messages (via their `conversationid` field).
+
+The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs.
 
 ## 📦 Installation
 
@@ -113,6 +185,10 @@ bun run dev
 
 # Build for production
 bun run build
+
+# Run tests / lint
+bun run test
+bun run lint
 ```
 
 ### Accessing the App
