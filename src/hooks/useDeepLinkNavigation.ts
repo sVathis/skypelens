@@ -162,6 +162,7 @@ export function useDeepLinkNavigation(): {
             // over instead of adding another copy of the export each.
             wantsExport: () => window.name === REPORT_TAB_NAME,
             getExport: () => useMessageStore.getState().exportData,
+            exportHas: (data, target) => canShowDeepLink(data.conversations, target),
             approve: (request, signal) =>
               new Promise<boolean>((resolve) => {
                 const answer = (allowed: boolean) => {

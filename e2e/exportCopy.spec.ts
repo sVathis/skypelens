@@ -242,6 +242,34 @@ test("a newer link held by another tab replaces a copy waiting for approval", as
   await expect(reportTab.locator(`[data-conversation-id="${CONVERSATION_ID}"]`)).toHaveCount(0);
 });
 
+test("a link that no tab has drops a copy still waiting for approval", async ({
+  context,
+}, testInfo) => {
+  const exportPath = testInfo.outputPath("messages.json");
+  await writeFile(exportPath, JSON.stringify(createSyntheticExport(300).exportData));
+  const userTab = await openUserTab(context, (page) => uploadInput(page).setInputFiles(exportPath));
+  const inExport = { conversationId: CONVERSATION_ID, messageId: messageIdFor(100) };
+  const notLoaded = { conversationId: "8:live:.cid.synthetic-not-loaded", messageId: messageIdFor(5) };
+  const links = await openReport(context, testInfo, [{ target: inExport }, { target: notLoaded }]);
+
+  const [reportTab] = await Promise.all([context.waitForEvent("page"), links.nth(0).click()]);
+  await expect(userTab.locator("[data-export-approval-code]")).toBeVisible();
+  await links.nth(1).click();
+
+  // No tab claims the newer link, so the question for the older one is withdrawn
+  await expect(userTab.locator("[data-export-approval-code]")).toHaveCount(0, { timeout: 20_000 });
+  await expect(reportTab.getByText(/None of your other SkypeLens tabs has the export/)).toBeVisible();
+  await expect(uploadInput(reportTab)).toHaveCount(1);
+  // The report's tab keeps the newest link, and has no export
+  const hash = new URLSearchParams(new URL(reportTab.url()).hash.slice(1));
+  expect(hash.get("conversationId")).toBe(notLoaded.conversationId);
+  expect(hash.get("messageId")).toBe(notLoaded.messageId);
+  expect(await reportTab.evaluate(() => {
+    type Store = { getState: () => { exportData: unknown } };
+    return (window as unknown as { __SKYPELENS_STORE__: Store }).__SKYPELENS_STORE__.getState().exportData;
+  })).toBeNull();
+});
+
 test("nothing is copied when the user doesn't allow it", async ({ context }, testInfo) => {
   const exportPath = testInfo.outputPath("messages.json");
   await writeFile(exportPath, JSON.stringify(createSyntheticExport(300).exportData));

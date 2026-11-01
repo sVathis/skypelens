@@ -41,12 +41,19 @@ export function createBus() {
   return { open: (): BridgeChannel => new FakeChannel() };
 }
 
+export interface FakePortPair extends PortPair {
+  port1: PortLike & { closed: boolean };
+  port2: PortLike & { closed: boolean };
+}
+
 /**
  * In-memory stand-in for MessageChannel. Like a real port, postMessage clones the
  * message (throwing DataCloneError for what can't be cloned) and delivers it only to
- * the other end, with transferred ports in `event.ports`.
+ * the other end, with transferred ports in `event.ports`. Each end closes on its own;
+ * nothing reaches a closed end. A short message posted just before close() still
+ * arrives, but an export still on its way is lost, as Firefox loses a large message.
  */
-export function createPortPair(): PortPair {
+export function createPortPair(): FakePortPair {
   class FakePort implements PortLike {
     other!: FakePort;
     closed = false;
@@ -58,7 +65,11 @@ export function createPortPair(): PortPair {
       if (this.closed) return;
       const data = structuredClone(message);
       const target = this.other;
-      queueMicrotask(() => target.receive({ data, ports: transfer } as unknown as MessageEvent));
+      const isExport = (data as { type?: unknown } | null)?.type === "export";
+      queueMicrotask(() => {
+        if (isExport && this.closed) return;
+        target.receive({ data, ports: transfer } as unknown as MessageEvent);
+      });
     }
     private receive(event: MessageEvent) {
       if (this.closed) return;
@@ -82,7 +93,6 @@ export function createPortPair(): PortPair {
     }
     close() {
       this.closed = true;
-      this.other.closed = true;
     }
   }
   const port1 = new FakePort();
@@ -94,8 +104,18 @@ export function createPortPair(): PortPair {
 
 /** One SharedWorker hub, with every tab of the test connected to it. */
 export function createBrokerNetwork() {
-  const hub = createBrokerHub(createPortPair);
+  // The private connections the hub set up between tabs
+  const transferPorts: FakePortPair[] = [];
+  const hub = createBrokerHub(() => {
+    const pair = createPortPair();
+    transferPorts.push(pair);
+    return pair;
+  });
   return {
+    transferPorts,
+    /** Ends of private connections that are still open. */
+    openTransferPorts: () =>
+      transferPorts.flatMap(({ port1, port2 }) => [port1, port2]).filter((port) => !port.closed),
     /** The raw connection a tab (or an attacker) has to the hub. */
     connectRaw: (): PortLike => {
       const { port1, port2 } = createPortPair();

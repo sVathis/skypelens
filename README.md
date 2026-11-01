@@ -123,7 +123,7 @@ https://thongtech.github.io/skypelens/#conversationId=19%3Aabc.def_01%40thread.s
 - **Fresh tab while another SkypeLens tab has the export loaded**: a tab whose export contains that message (not just the conversation) takes over.
   - If the fresh tab is the one `report.html` links open in (see below), it asks that tab for a copy of the export and shows a short code. The tab with the export asks you, showing the same code: **Allow copy** sends the export, and the fresh tab shows the message itself, so later report links open there without loading anything. Allow only when the codes match.
   - Any other fresh tab (e.g. from a `report.md` link or a pasted link) hands the link over: the tab with the export jumps to the message, and the fresh tab says so. Only the two IDs are passed, so this doesn't add another copy of the export.
-  - If you click another link while the copy waits for your answer, the newest link wins. When a different tab holds it, that tab is asked instead and the first question is withdrawn.
+  - If you click another link while the copy waits for your answer, the newest link wins. When a different tab holds it, that tab is asked instead and the first question is withdrawn. When no tab holds it, the copy is dropped and the report's tab says so; it keeps the newest link, ready for you to load the export.
 
 #### How the export copy is protected
 
@@ -195,7 +195,7 @@ The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_co
 [`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar, and one on the same finding after scrolling away) must land in that same tab and show its message, without reloading the tab or asking for the export again. [`e2e/exportCopy.spec.ts`](e2e/exportCopy.spec.ts) loads the export in a tab opened by hand instead. It checks:
 
 - the report's tab copies the export from there once allowed, and media files (images, attachments) arrive with the same names, sizes, types and bytes, and still display and download;
-- declining, a failed copy and a newer link from another tab are all handled;
+- declining, a failed copy, a newer link from another tab and a link no tab has are all handled;
 - a link that opens a new tab each time only hands the link over.
 
 `SKYPELENS_E2E_PREVIEW=1 bun run test:e2e -g "once allowed|newer link|reuse one"` runs those flows against the production build.

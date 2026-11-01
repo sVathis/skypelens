@@ -10,6 +10,7 @@ const FAILURE_TEXT: Record<ExportCopyFailure, string> = {
 	error: "Your other SkypeLens tab could not copy its export (it may be too large for the browser's memory).",
 	timeout: "Your other SkypeLens tab didn't answer in time.",
 	unavailable: "Your other SkypeLens tab could not be reached. It may have been closed.",
+	"not-found": "None of your other SkypeLens tabs has the export with the message this link points to.",
 };
 
 /** Progress of copying an export from another tab, shown above the upload screen. */

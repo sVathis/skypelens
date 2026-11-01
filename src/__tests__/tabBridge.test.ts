@@ -131,6 +131,11 @@ describe("tab bridge", () => {
 
 const CONVERSATION_A = "8:live:synthetic-a";
 const CONVERSATION_B = "8:live:synthetic-b";
+const CONVERSATION_C = "8:live:synthetic-c"; // In no tab's export
+
+const IDLE = { offers: 0, claims: 0, transfers: 0, approvals: 0, ports: 0 };
+// Claims for offers that led to a copy expire on their own (OFFER_TTL_MS)
+const NO_COPY = { transfers: 0, approvals: 0, ports: 0 };
 
 function exportWith(conversationId: string): SkypeExport {
   return {
@@ -194,6 +199,7 @@ function transferTab(
       broker,
       wantsExport: () => options.wantsExport ?? false,
       getExport: handlers.getExport,
+      exportHas: (data, t) => canShowDeepLink(data.conversations, t),
       approve: handlers.approve,
       onCopyStateChange: (state) => states.push(state),
       onExportReceived: handlers.onExportReceived,
@@ -468,6 +474,7 @@ describe("copying the export to the report's tab", () => {
     });
 
     it("keeps a pending copy when the newer link is in the same tab's export", async () => {
+      vi.useFakeTimers();
       const bus = createBus();
       const network = createBrokerNetwork();
       const answer = deferred<boolean>();
@@ -478,14 +485,71 @@ describe("copying the export to the report's tab", () => {
       const reportTab = transferTab(bus, network, { wantsExport: true });
 
       reportTab.bridge.offer(linkTo(CONVERSATION_A, 3));
-      await flush();
+      await vi.advanceTimersByTimeAsync(0);
       reportTab.bridge.offer(linkTo(CONVERSATION_A, 7));
-      await flush();
+      // The newer offer's time runs out after the same tab claimed it
+      await vi.advanceTimersByTimeAsync(OFFER_TTL_MS);
       answer.resolve(true);
-      await flush();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(holder.approve).toHaveBeenCalledTimes(1);
       expect(reportTab.onExportReceived).toHaveBeenCalledTimes(1);
+      expect(reportTab.states[reportTab.states.length - 1]).toBeNull();
+    });
+
+    it("drops a pending copy when no tab has the newer link", async () => {
+      vi.useFakeTimers();
+      const bus = createBus();
+      const network = createBrokerNetwork();
+      const answer = deferred<boolean>();
+      const holder = transferTab(bus, network, {
+        exportData: exportWith(CONVERSATION_A),
+        approve: () => answer.promise,
+      });
+      const reportTab = transferTab(bus, network, { wantsExport: true });
+
+      reportTab.bridge.offer(linkTo(CONVERSATION_A)); // Waiting for approval
+      await vi.advanceTimersByTimeAsync(0);
+      reportTab.bridge.offer(linkTo(CONVERSATION_C)); // Nobody claims it
+      await vi.advanceTimersByTimeAsync(OFFER_TTL_MS);
+
+      expect(reportTab.states[reportTab.states.length - 1]).toEqual({
+        phase: "failed",
+        reason: "not-found",
+      });
+      const [, signal] = holder.approve.mock.calls[0];
+      expect(signal.aborted).toBe(true); // The holder's question is withdrawn
+
+      // Allowing it now (the dialog still open) sends nothing that can be taken
+      answer.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reportTab.onExportReceived).not.toHaveBeenCalled();
+      expect(reportTab.bridge.getPendingCounts()).toEqual(IDLE);
+      expect(holder.bridge.getPendingCounts()).toEqual(IDLE);
+    });
+
+    it("takes no export that can't show the newest link, even one that arrives first", async () => {
+      const bus = createBus();
+      const network = createBrokerNetwork();
+      const answer = deferred<boolean>();
+      transferTab(bus, network, {
+        exportData: exportWith(CONVERSATION_A),
+        approve: () => answer.promise,
+      });
+      const reportTab = transferTab(bus, network, { wantsExport: true });
+
+      reportTab.bridge.offer(linkTo(CONVERSATION_A));
+      await flush();
+      reportTab.bridge.offer(linkTo(CONVERSATION_C));
+      // Allowed before the newer offer's time runs out
+      answer.resolve(true);
+      await flush();
+
+      expect(reportTab.onExportReceived).not.toHaveBeenCalled();
+      expect(reportTab.states[reportTab.states.length - 1]).toEqual({
+        phase: "failed",
+        reason: "not-found",
+      });
     });
 
     it("ignores an export that arrives for a replaced copy", async () => {
@@ -572,6 +636,114 @@ describe("copying the export to the report's tab", () => {
     });
   });
 
+  describe("closing private connections", () => {
+    it("closes both ends after each copy, refusal and failure", async () => {
+      const bus = createBus();
+      const network = createBrokerNetwork();
+      const answers = [false, false, false, true, true];
+      const holder = transferTab(bus, network, {
+        exportData: exportWith(CONVERSATION_A),
+        approve: async () => answers.shift()!,
+      });
+      const reportTab = transferTab(bus, network, { wantsExport: true });
+
+      for (let n = 1; n <= 5; n++) {
+        // The last round fails: the export can't be cloned
+        if (n === 5) holder.setExport({ ...exportWith(CONVERSATION_A), cannotClone: () => undefined } as SkypeExport);
+        reportTab.bridge.offer(linkTo(CONVERSATION_A, n));
+        await flush();
+        expect(network.transferPorts).toHaveLength(n);
+        expect(network.openTransferPorts()).toEqual([]);
+        expect(holder.bridge.getPendingCounts()).toMatchObject(NO_COPY);
+        expect(reportTab.bridge.getPendingCounts()).toMatchObject(NO_COPY);
+      }
+      expect(reportTab.states.filter((s) => s?.phase === "failed")).toEqual([
+        { phase: "failed", reason: "declined" },
+        { phase: "failed", reason: "declined" },
+        { phase: "failed", reason: "declined" },
+        { phase: "failed", reason: "error" },
+      ]);
+      expect(reportTab.onExportReceived).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes both ends when the asking tab gives up", async () => {
+      vi.useFakeTimers();
+      const bus = createBus();
+      const network = createBrokerNetwork();
+      const never = () => new Promise<boolean>(() => {});
+      const holderA = transferTab(bus, network, { exportData: exportWith(CONVERSATION_A), approve: never });
+      transferTab(bus, network, { exportData: exportWith(CONVERSATION_B), approve: never });
+      const reportTab = transferTab(bus, network, { wantsExport: true, approvalTimeoutMs: 30_000 });
+
+      // Replaced by a newer link another tab holds
+      reportTab.bridge.offer(linkTo(CONVERSATION_A));
+      await vi.advanceTimersByTimeAsync(0);
+      reportTab.bridge.offer(linkTo(CONVERSATION_B));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(network.transferPorts).toHaveLength(2);
+      expect(network.openTransferPorts()).toHaveLength(2); // Only B's, still asking
+      expect(holderA.bridge.getPendingCounts().ports).toBe(0);
+
+      // Timed out
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reportTab.states[reportTab.states.length - 1]).toEqual({ phase: "failed", reason: "timeout" });
+      expect(network.openTransferPorts()).toEqual([]);
+
+      // Dropped because no tab has the newer link
+      reportTab.bridge.offer(linkTo(CONVERSATION_A));
+      await vi.advanceTimersByTimeAsync(0);
+      reportTab.bridge.offer(linkTo(CONVERSATION_C));
+      await vi.advanceTimersByTimeAsync(OFFER_TTL_MS);
+      expect(network.transferPorts).toHaveLength(3);
+      expect(network.openTransferPorts()).toEqual([]);
+
+      // The asking tab closes
+      reportTab.bridge.offer(linkTo(CONVERSATION_A));
+      await vi.advanceTimersByTimeAsync(0);
+      reportTab.bridge.close();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(network.transferPorts).toHaveLength(4);
+      expect(network.openTransferPorts()).toEqual([]);
+      expect(holderA.bridge.getPendingCounts()).toMatchObject(NO_COPY);
+    });
+
+    it("keeps the holder's end open after its last message until the asking tab answers", async () => {
+      vi.useFakeTimers();
+      const bus = createBus();
+      const network = createBrokerNetwork();
+      const answer = deferred<boolean>();
+      const holder = transferTab(bus, network, {
+        exportData: exportWith(CONVERSATION_A),
+        approve: () => answer.promise,
+        copyTimeoutMs: 60_000,
+      });
+      const reportTab = transferTab(bus, network, { wantsExport: true });
+      reportTab.bridge.offer(linkTo(CONVERSATION_A));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // A tab that asks but never answers the holder's "busy"
+      const silent = network.connect("silent");
+      const port = await silent.requestExport(holder.tabId, { code: "AAA-AAA", target: linkTo(CONVERSATION_A) });
+      const received: unknown[] = [];
+      port!.addEventListener("message", (event) => received.push(event.data));
+      port!.start?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toEqual([{ type: "busy" }]);
+      expect(holder.bridge.getPendingCounts()).toMatchObject({ approvals: 1, ports: 2 });
+
+      // The report's tab answers the copy with "received"; the silent tab never does
+      answer.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reportTab.onExportReceived).toHaveBeenCalledTimes(1);
+      expect(holder.bridge.getPendingCounts().ports).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(holder.bridge.getPendingCounts()).toEqual(IDLE);
+      expect(network.openTransferPorts()).toEqual([port]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
   describe("bookkeeping", () => {
     it("forgets an offer nobody claims, and ignores a late claim", async () => {
       vi.useFakeTimers();
@@ -636,8 +808,8 @@ describe("copying the export to the report's tab", () => {
       expect(holder.bridge.getPendingCounts().claims).toBe(100);
 
       await vi.advanceTimersByTimeAsync(OFFER_TTL_MS);
-      expect(fresh.bridge.getPendingCounts()).toEqual({ offers: 0, claims: 0, transfers: 0, approvals: 0 });
-      expect(holder.bridge.getPendingCounts()).toEqual({ offers: 0, claims: 0, transfers: 0, approvals: 0 });
+      expect(fresh.bridge.getPendingCounts()).toEqual(IDLE);
+      expect(holder.bridge.getPendingCounts()).toEqual(IDLE);
     });
 
     it("clears everything, timers included, when closed", async () => {
@@ -662,10 +834,11 @@ describe("copying the export to the report's tab", () => {
       for (const tab of [holder, reportTab]) {
         tab.bridge.close();
         tab.broker.close();
-        expect(tab.bridge.getPendingCounts()).toEqual({ offers: 0, claims: 0, transfers: 0, approvals: 0 });
+        expect(tab.bridge.getPendingCounts()).toEqual(IDLE);
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(0);
+      expect(network.openTransferPorts()).toEqual([]);
       const [, signal] = holder.approve.mock.calls[0];
       expect(signal.aborted).toBe(true);
     });

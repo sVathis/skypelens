@@ -24,13 +24,23 @@ type BridgeMessage =
   | { type: "navigate-claim"; nonce: string; tabId: string }
   | { type: "navigate-confirm"; nonce: string; tabId: string; target: DeepLinkTarget };
 
-/** Messages on the private connection, from the tab holding the export. */
+/**
+ * Messages on the private connection, from the tab holding the export. All but
+ * "approved" are its last message. The asking tab answers that with "received", or
+ * sends "cancel" when it gives up; then both tabs close their ends.
+ */
 type TransferMessage =
   | { type: "approved" }
   | { type: "export"; data: SkypeExport }
   | { type: "declined" | "busy" | "export-error" };
 
-export type ExportCopyFailure = "declined" | "busy" | "error" | "timeout" | "unavailable";
+export type ExportCopyFailure =
+  | "declined"
+  | "busy"
+  | "error"
+  | "timeout"
+  | "unavailable"
+  | "not-found";
 
 /** Progress of copying an export from another SkypeLens tab into this one. */
 export type ExportCopyState =
@@ -52,6 +62,8 @@ export interface ExportTransferOptions {
   wantsExport: () => boolean;
   /** The export this tab can copy to another tab. */
   getExport: () => SkypeExport | null;
+  /** Whether a received export can show the link. */
+  exportHas: (data: SkypeExport, target: DeepLinkTarget) => boolean;
   /**
    * Asks the user whether to send this tab's export to the tab showing `code`.
    * `signal` aborts when the asking tab gives up; the answer is then ignored.
@@ -84,7 +96,13 @@ export interface TabBridgeOptions {
 export interface TabBridge {
   offer: (target: DeepLinkTarget) => void;
   /** Sizes of the bridge's bookkeeping, for tests and diagnostics. */
-  getPendingCounts: () => { offers: number; claims: number; transfers: number; approvals: number };
+  getPendingCounts: () => {
+    offers: number;
+    claims: number;
+    transfers: number;
+    approvals: number;
+    ports: number;
+  };
   close: () => void;
 }
 
@@ -153,6 +171,10 @@ function parseTransferMessage(data: unknown): TransferMessage | null {
 /** A copy this tab asked another tab for. */
 interface PendingTransfer {
   holderTabId: string;
+  /** The newest link this tab asks for; the copy is only taken if it can show it. */
+  target: DeepLinkTarget;
+  /** The offer for `target`, while no tab has claimed it yet. */
+  unclaimedNonce: string | null;
   port: PortLike | null;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -176,6 +198,8 @@ export function createTabBridge({
   let transfer: PendingTransfer | null = null;
   // The request the user is being asked about in this tab, if any
   let approval: AbortController | null = null;
+  // Ports to tabs that asked for this tab's export, with the function that closes each
+  const holderPorts = new Map<PortLike, () => void>();
   let closed = false;
 
   const forgetClaim = (nonce: string) => {
@@ -195,20 +219,29 @@ export function createTabBridge({
 
   // --- Receiving a copy -------------------------------------------------------------
 
-  const endTransfer = (ended: PendingTransfer, notifyHolder: boolean) => {
+  /**
+   * Ends a copy. `reply` tells the holder why: "received" after its last message,
+   * "cancel" when this tab gives up. The port is closed right after: a short message
+   * posted just before close() still arrives (checked in Chromium and Firefox), and the
+   * holder closes its end when it gets it.
+   */
+  const endTransfer = (ended: PendingTransfer, reply: "received" | "cancel") => {
     clearTimeout(ended.timer);
     if (ended.port) {
-      // The holder closes the port when it gets "cancel"; closing it here could drop
-      // the message. Anything that still arrives is ignored (transfer !== ended).
-      if (notifyHolder) ended.port.postMessage({ type: "cancel" });
-      else ended.port.close();
+      ended.port.postMessage({ type: reply });
+      ended.port.close();
+      ended.port = null;
     }
     if (transfer === ended) transfer = null;
   };
 
-  const failTransfer = (failed: PendingTransfer, reason: ExportCopyFailure) => {
+  const failTransfer = (
+    failed: PendingTransfer,
+    reason: ExportCopyFailure,
+    reply: "received" | "cancel" = "cancel",
+  ) => {
     if (transfer !== failed) return;
-    endTransfer(failed, true);
+    endTransfer(failed, reply);
     exportTransfer?.onCopyStateChange({ phase: "failed", reason });
   };
 
@@ -216,6 +249,8 @@ export function createTabBridge({
     const code = randomCode();
     const started: PendingTransfer = {
       holderTabId,
+      target,
+      unclaimedNonce: null,
       port: null,
       timer: setTimeout(
         () => failTransfer(started, "timeout"),
@@ -229,6 +264,7 @@ export function createTabBridge({
       if (transfer !== started) {
         // Replaced by a newer link, or this tab closed, while connecting
         port?.postMessage({ type: "cancel" });
+        port?.close();
         return;
       }
       if (!port) {
@@ -251,16 +287,23 @@ export function createTabBridge({
             options.onCopyStateChange({ phase: "copying" });
             return;
           case "export":
-            endTransfer(started, false);
+            // The newest link may have changed while the copy was on its way
+            if (!options.exportHas(message.data, started.target)) {
+              failTransfer(started, "not-found", "received");
+              return;
+            }
+            endTransfer(started, "received");
+            // The copy shows the newest link; a claim for it arriving now changes nothing
+            clearOffer();
             options.onCopyStateChange(null);
             options.onExportReceived(message.data);
             return;
           case "declined":
           case "busy":
-            failTransfer(started, message.type);
+            failTransfer(started, message.type, "received");
             return;
           case "export-error":
-            failTransfer(started, "error");
+            failTransfer(started, "error", "received");
             return;
         }
       });
@@ -274,10 +317,20 @@ export function createTabBridge({
     target: DeepLinkTarget,
   ) => {
     // That tab is already asked for its export, and it has the newest link too
-    if (transfer?.holderTabId === holderTabId) return;
+    if (transfer?.holderTabId === holderTabId) {
+      transfer.unclaimedNonce = null;
+      return;
+    }
     // A newer link that another tab holds replaces the copy still on its way
-    if (transfer) endTransfer(transfer, true);
+    if (transfer) endTransfer(transfer, "cancel");
     startTransfer(options, holderTabId, target);
+  };
+
+  const expireOffer = (nonce: string) => {
+    if (currentOffer?.nonce !== nonce) return;
+    clearOffer();
+    // No open tab has the newest link, so the copy on its way can't show it either
+    if (transfer?.unclaimedNonce === nonce) failTransfer(transfer, "not-found");
   };
 
   // --- Sending a copy ---------------------------------------------------------------
@@ -286,32 +339,54 @@ export function createTabBridge({
     options: ExportTransferOptions,
     { code, target, port }: { code: string; target: DeepLinkTarget; port: PortLike },
   ) => {
+    let onCancel = () => {};
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    const release = () => {
+      clearTimeout(releaseTimer);
+      port.removeEventListener("message", handleReply);
+      holderPorts.delete(port);
+      port.close();
+    };
+    const handleReply = (event: MessageEvent) => {
+      const type = (event.data as { type?: unknown } | null)?.type;
+      if (type === "cancel") onCancel();
+      if (type === "cancel" || type === "received") release();
+    };
+    // Firefox can lose a large message posted just before close(), so after its last
+    // message this tab keeps the port open until the asking tab answers or gives up
+    const sendLast = (message: TransferMessage) => {
+      try {
+        port.postMessage(message);
+      } catch {
+        // The export could not be cloned (e.g. out of memory)
+        port.postMessage({ type: "export-error" });
+      }
+      releaseTimer = setTimeout(release, options.copyTimeoutMs ?? DEFAULT_COPY_TIMEOUT_MS);
+    };
+    holderPorts.set(port, release);
+    port.addEventListener("message", handleReply);
+    port.start?.();
+
     if (!options.getExport() || !canHandle(target)) {
-      port.postMessage({ type: "declined" });
+      sendLast({ type: "declined" });
       return;
     }
     if (approval) {
       // One question at a time; the asking tab can try again
-      port.postMessage({ type: "busy" });
+      sendLast({ type: "busy" });
       return;
     }
 
     const controller = new AbortController();
     approval = controller;
-    const timer = setTimeout(
-      () => controller.abort(),
-      options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
-    );
-    const handleCancel = (event: MessageEvent) => {
-      if ((event.data as { type?: unknown } | null)?.type !== "cancel") return;
+    onCancel = () => controller.abort();
+    // The asking tab gives up after the same time and stops listening
+    const timer = setTimeout(() => {
       controller.abort();
-      port.close();
-    };
-    port.addEventListener("message", handleCancel);
-    port.start?.();
+      release();
+    }, options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS);
     const finish = () => {
       clearTimeout(timer);
-      port.removeEventListener("message", handleCancel);
       if (approval === controller) approval = null;
     };
     // A withdrawn question is over at once, whether or not the UI answers it
@@ -322,19 +397,15 @@ export function createTabBridge({
       .catch(() => false)
       .then((allowed) => {
         finish();
+        // Cancelled, timed out or closed: the port is already released
         if (controller.signal.aborted || closed) return;
         if (!allowed) {
-          port.postMessage({ type: "declined" });
+          sendLast({ type: "declined" });
           return;
         }
         port.postMessage({ type: "approved" });
         const data = options.getExport();
-        try {
-          port.postMessage(data ? { type: "export", data } : { type: "export-error" });
-        } catch {
-          // The export could not be cloned (e.g. out of memory)
-          port.postMessage({ type: "export-error" });
-        }
+        sendLast(data ? { type: "export", data } : { type: "export-error" });
       });
   };
 
@@ -386,7 +457,13 @@ export function createTabBridge({
     offer: (target) => {
       clearOffer();
       const nonce = randomId();
-      currentOffer = { nonce, target, timer: setTimeout(clearOffer, OFFER_TTL_MS) };
+      currentOffer = { nonce, target, timer: setTimeout(() => expireOffer(nonce), OFFER_TTL_MS) };
+      // A copy on its way now has to show this link: it is kept if the same tab claims
+      // it, replaced if another tab does, and dropped if no tab does
+      if (transfer) {
+        transfer.target = target;
+        transfer.unclaimedNonce = nonce;
+      }
       channel.postMessage({ type: "navigate-offer", nonce, target });
     },
     getPendingCounts: () => ({
@@ -394,13 +471,15 @@ export function createTabBridge({
       claims: claims.size,
       transfers: transfer ? 1 : 0,
       approvals: approval ? 1 : 0,
+      ports: holderPorts.size + (transfer?.port ? 1 : 0),
     }),
     close: () => {
       closed = true;
       clearOffer();
       for (const nonce of [...claims.keys()]) forgetClaim(nonce);
-      if (transfer) endTransfer(transfer, true);
+      if (transfer) endTransfer(transfer, "cancel");
       approval?.abort();
+      for (const release of [...holderPorts.values()]) release();
       channel.removeEventListener("message", handleMessage);
       channel.close();
     },
