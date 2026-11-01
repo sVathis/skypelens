@@ -1,4 +1,4 @@
-import { Alert, Button, Center, Code, Loader, Stack, Text } from "@mantine/core";
+import { Alert, Button, Center, Code, Stack, Text } from "@mantine/core";
 import { IconAlertCircle, IconExternalLink, IconLink } from "@tabler/icons-react";
 import { useCallback } from "react";
 import { FileUpload } from "../Upload/FileUpload";
@@ -6,6 +6,7 @@ import { useMessageStore, useExportData } from "../../store/messageStore";
 import type { SkypeExport } from "../../types/messages";
 import { MessageView } from "../Message/MessageView";
 import { useDeepLinkNavigation } from "../../hooks/useDeepLinkNavigation";
+import { ExportApprovalDialog, ExportCopyNotice } from "./ExportTransfer";
 
 export function MainContent() {
 	const { setExportData } = useMessageStore();
@@ -14,7 +15,7 @@ export function MainContent() {
 	const navigationError = useMessageStore((state) => state.navigationError);
 	const setNavigationError = useMessageStore((state) => state.setNavigationError);
 	const unloadExport = useMessageStore((state) => state.unloadExport);
-	const { forwardedTarget, exportCopy } = useDeepLinkNavigation();
+	const { forwardedTarget, exportCopy, approvalRequest } = useDeepLinkNavigation();
 
 	const handleFileProcessed = useCallback((data: SkypeExport) => {
 		setExportData(data);
@@ -44,18 +45,8 @@ export function MainContent() {
 	);
 
 	if (!exportData) {
-		const notice = exportCopy === "copying" ? (
-			<Alert icon={<Loader size={16} />} color="blue" title="Copying your export from your other SkypeLens tab…">
-				<Text size="sm">
-					Another SkypeLens tab already has this export loaded. This tab takes a copy, so the next report links open here without loading the export again. The copy stays in this browser.
-				</Text>
-			</Alert>
-		) : exportCopy === "failed" ? (
-			<Alert icon={<IconAlertCircle size={16} />} color="yellow" title="Could not copy the export from your other SkypeLens tab">
-				<Text size="sm">
-					Load the export below to open this link here.
-				</Text>
-			</Alert>
+		const notice = exportCopy ? (
+			<ExportCopyNotice state={exportCopy} />
 		) : forwardedTarget ? (
 			<Alert icon={<IconExternalLink size={16} />} color="teal" title="Opened in your other SkypeLens tab">
 				<Text size="sm">
@@ -89,6 +80,7 @@ export function MainContent() {
 		<Stack h="100%" gap={0} style={{ overflow: "auto" }}>
 			{errorAlert}
 			<MessageView />
+			<ExportApprovalDialog request={approvalRequest} />
 		</Stack>
 	);
 }

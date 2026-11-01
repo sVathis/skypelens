@@ -121,9 +121,20 @@ https://thongtech.github.io/skypelens/#conversationId=19%3Aabc.def_01%40thread.s
 - **Export already loaded in this tab** (a report link aimed at this tab, a link pasted into its address bar, or Back/Forward): SkypeLens selects the conversation, loads as much history as needed, scrolls the message to the centre and highlights it, with the surrounding messages around it. Any active search is cleared so it can't hide the target.
 - **Fresh tab, nothing loaded**: SkypeLens keeps nothing between visits, so it shows the upload screen with a note about the link. Load the export and it jumps to the message automatically.
 - **Fresh tab while another SkypeLens tab has the export loaded**: a tab whose export contains that message (not just the conversation) takes over.
-  - If the fresh tab is the one `report.html` links open in (see below), it copies the export from that tab and shows the message itself, so later report links open there without loading anything.
+  - If the fresh tab is the one `report.html` links open in (see below), it asks that tab for a copy of the export and shows a short code. The tab with the export asks you, showing the same code: **Allow copy** sends the export, and the fresh tab shows the message itself, so later report links open there without loading anything. Allow only when the codes match.
   - Any other fresh tab (e.g. from a `report.md` link or a pasted link) hands the link over: the tab with the export jumps to the message, and the fresh tab says so. Only the two IDs are passed, so this doesn't add another copy of the export.
-  - The export copy goes only to the tab that asked for it, and stays in this browser: tabs share it directly, nothing is uploaded or saved. While both tabs are open, each holds its own copy in memory; close the one you no longer need.
+  - If you click another link while the copy waits for your answer, the newest link wins. When a different tab holds it, that tab is asked instead and the first question is withdrawn.
+
+#### How the export copy is protected
+
+Any page on the same origin as SkypeLens can talk to SkypeLens tabs. On GitHub Pages that's every project page of the same user (`<user>.github.io/*`). The copy is designed so that such a page can't get your export:
+
+- **Nothing private on the shared channel.** Tabs find each other on a `BroadcastChannel`, which every same-origin page can read, so only the two IDs go there.
+- **A private connection for the copy.** A small SharedWorker hands the two tabs the two ends of a new `MessageChannel`. No other page holds those ends, so knowing the IDs or listening on any channel gets an eavesdropper nothing. The worker never sees the export.
+- **Your approval, in the tab that holds the export.** Every copy needs **Allow copy**. Another page can ask too, but it can't make the report's tab show its code, so a mismatched code means: don't allow. One question is shown at a time; a question nobody answers is withdrawn after two minutes.
+- **No impersonation.** The worker gives the private connection to the page that actually asked, and doesn't let a page take over another tab's ID.
+
+The copy stays in this browser: nothing is uploaded or written to disk. While both tabs are open, each holds its own copy in memory; close the one you no longer need. Without SharedWorker support (e.g. some mobile browsers), tabs only hand links over.
 - If the conversation or message is not in the loaded export, SkypeLens says so instead of opening something else. **Load another export** in that message lets you load the right export (e.g. a newer one); the link then completes.
 - If the linked message is one SkypeLens folds into another bubble (a translation pair), that bubble is highlighted and a note explains why. If it is a message SkypeLens doesn't display (e.g. an album placeholder), the nearest displayed message gets a dashed highlight and a note.
 - Clicking a conversation in the sidebar records it in browser history, so Back returns to the previous conversation or linked message.
@@ -169,7 +180,7 @@ Write `skypelens_url` to `findings.json`/`findings.csv` too if you want it there
 
 **Clicking through findings without re-uploading.** In `report.html`, every "View in SkypeLens" link opens in the same browser tab, named `skypelens`:
 
-1. The first click opens that tab. Load the export there once. If another SkypeLens tab already has it loaded (say, one you opened yourself), the new tab copies it from there instead of asking.
+1. The first click opens that tab. Load the export there once. If another SkypeLens tab already has it loaded (say, one you opened yourself), allow the copy in that tab instead (see above).
 2. Every later click goes back to that tab and only changes the part after `#`, so SkypeLens jumps to the new message immediately, without reloading or asking for the export again. Clicking the same finding again after scrolling away jumps back to it too, where the browser supports the [Navigation API](https://developer.mozilla.org/docs/Web/API/Navigation_API) (current Chrome, Edge, Firefox and Safari).
 
 For this to work:
@@ -181,7 +192,13 @@ For this to work:
 
 The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs and builds the same URL before the `#`.
 
-[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar, and one on the same finding after scrolling away) must land in that same tab and show its message, without reloading the tab or asking for the export again. [`e2e/exportCopy.spec.ts`](e2e/exportCopy.spec.ts) loads the export in a tab opened by hand instead, and checks that the report's tab copies it from there, while a link that opens a new tab each time only hands the link over.
+[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar, and one on the same finding after scrolling away) must land in that same tab and show its message, without reloading the tab or asking for the export again. [`e2e/exportCopy.spec.ts`](e2e/exportCopy.spec.ts) loads the export in a tab opened by hand instead. It checks:
+
+- the report's tab copies the export from there once allowed, and media files (images, attachments) arrive with the same names, sizes, types and bytes, and still display and download;
+- declining, a failed copy and a newer link from another tab are all handled;
+- a link that opens a new tab each time only hands the link over.
+
+`SKYPELENS_E2E_PREVIEW=1 bun run test:e2e -g "once allowed|newer link|reuse one"` runs those flows against the production build.
 
 ## 📦 Installation
 

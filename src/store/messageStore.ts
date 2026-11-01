@@ -341,3 +341,10 @@ export const useSelectedConversationId = () =>
 export const useExportData = () => useMessageStore((state) => state.exportData);
 export const useSelectConversation = () =>
   useMessageStore((state) => state.selectConversation);
+
+// Lets the browser tests (e2e/) inspect the loaded export. Development server only:
+// import.meta.env.DEV is false in production builds, which drop this.
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as Window & { __SKYPELENS_STORE__?: typeof useMessageStore }).__SKYPELENS_STORE__ =
+    useMessageStore;
+}

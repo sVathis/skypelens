@@ -1,28 +1,43 @@
-import type { DeepLinkTarget } from "./deepLink";
+import { isDeepLinkTarget, type DeepLinkTarget } from "./deepLink";
+import type { ExportBroker, PortLike } from "./exportBroker";
+import { randomCode, randomId } from "./random";
 import type { SkypeExport } from "../types/messages";
 
 /**
- * Passes deep links, and if needed the loaded export, between SkypeLens tabs of the
- * same origin.
+ * Passes deep links, and with the user's approval the loaded export, between
+ * SkypeLens tabs of the same origin.
  *
  * A deep link opened in a fresh tab has no export loaded (nothing is persisted).
- * The fresh tab offers the link, and the first tab whose export contains the message
- * claims it. Then either:
+ * The fresh tab offers the link on a BroadcastChannel, and the first tab whose export
+ * contains the message claims it. Only identifiers travel over that channel, which
+ * every same-origin context can read. Then either:
  *
- * - the claiming tab shows the link (only identifiers travel over the channel), or
- * - if the fresh tab wants a copy of the export (`exportTransfer.wantsExport`), the
- *   claiming tab sends it one and the fresh tab shows the link itself. The copy goes
- *   over a channel opened for that one transfer, so other SkypeLens tabs never
- *   receive it. It stays in this browser: tabs of the same origin only.
+ * - the claiming tab shows the link, or
+ * - if the fresh tab wants a copy of the export (`exportTransfer.wantsExport`), it asks
+ *   the claiming tab for one over a private connection (exportBroker.ts). The claiming
+ *   tab asks the user first, showing a code the asking tab also displays, and sends
+ *   its export only if the user allows it. The fresh tab then shows the link itself.
  */
 
 type BridgeMessage =
   | { type: "navigate-offer"; nonce: string; target: DeepLinkTarget }
   | { type: "navigate-claim"; nonce: string; tabId: string }
-  | { type: "navigate-confirm"; nonce: string; tabId: string; target: DeepLinkTarget }
-  | { type: "export-request"; nonce: string; tabId: string };
+  | { type: "navigate-confirm"; nonce: string; tabId: string; target: DeepLinkTarget };
 
-type TransferMessage = { type: "export"; data: SkypeExport } | { type: "export-error" };
+/** Messages on the private connection, from the tab holding the export. */
+type TransferMessage =
+  | { type: "approved" }
+  | { type: "export"; data: SkypeExport }
+  | { type: "declined" | "busy" | "export-error" };
+
+export type ExportCopyFailure = "declined" | "busy" | "error" | "timeout" | "unavailable";
+
+/** Progress of copying an export from another SkypeLens tab into this one. */
+export type ExportCopyState =
+  | { phase: "awaiting-approval"; code: string }
+  | { phase: "copying" }
+  | { phase: "failed"; reason: ExportCopyFailure }
+  | null;
 
 export interface BridgeChannel {
   postMessage: (message: unknown) => void;
@@ -32,18 +47,26 @@ export interface BridgeChannel {
 }
 
 export interface ExportTransferOptions {
-  /** Opens the channel that one export copy, identified by `nonce`, travels on. */
-  openTransferChannel: (nonce: string) => BridgeChannel;
+  broker: ExportBroker;
   /** Whether this tab takes a copy of the export instead of handing the link over. */
   wantsExport: () => boolean;
   /** The export this tab can copy to another tab. */
   getExport: () => SkypeExport | null;
-  /** Called in the receiving tab: a copy is on its way. */
-  onCopyStarted: (target: DeepLinkTarget) => void;
+  /**
+   * Asks the user whether to send this tab's export to the tab showing `code`.
+   * `signal` aborts when the asking tab gives up; the answer is then ignored.
+   */
+  approve: (
+    request: { code: string; target: DeepLinkTarget },
+    signal: AbortSignal,
+  ) => Promise<boolean>;
+  /** Progress in the receiving tab. */
+  onCopyStateChange: (state: ExportCopyState) => void;
   onExportReceived: (data: SkypeExport) => void;
-  onCopyFailed: () => void;
-  /** How long to wait for the copy; cloning a large export takes a few seconds. */
-  timeoutMs?: number;
+  /** How long to wait for the user to answer in the other tab. */
+  approvalTimeoutMs?: number;
+  /** How long to wait for the copy once allowed; cloning a large export takes seconds. */
+  copyTimeoutMs?: number;
 }
 
 export interface TabBridgeOptions {
@@ -60,26 +83,18 @@ export interface TabBridgeOptions {
 
 export interface TabBridge {
   offer: (target: DeepLinkTarget) => void;
+  /** Sizes of the bridge's bookkeeping, for tests and diagnostics. */
+  getPendingCounts: () => { offers: number; claims: number; transfers: number; approvals: number };
   close: () => void;
 }
 
-const DEFAULT_TRANSFER_TIMEOUT_MS = 60_000;
-
-function randomId(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-function isTarget(value: unknown): value is DeepLinkTarget {
-  if (!value || typeof value !== "object") return false;
-  const { conversationId, messageId } = value as Record<string, unknown>;
-  return (
-    typeof conversationId === "string" &&
-    conversationId.length > 0 &&
-    (messageId === null || typeof messageId === "string")
-  );
-}
+// Claims answer an offer within milliseconds; anything later is stale
+export const OFFER_TTL_MS = 10_000;
+const CLAIM_TTL_MS = 10_000;
+// Claims this tab remembers at once, however many offers it sees
+const MAX_CLAIMS = 100;
+const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
+const DEFAULT_COPY_TIMEOUT_MS = 60_000;
 
 function isExport(value: unknown): value is SkypeExport {
   if (!value || typeof value !== "object") return false;
@@ -98,16 +113,15 @@ function parseMessage(data: unknown): BridgeMessage | null {
 
   switch (message.type) {
     case "navigate-offer":
-      return isTarget(message.target)
+      return isDeepLinkTarget(message.target)
         ? { type: "navigate-offer", nonce: message.nonce, target: message.target }
         : null;
     case "navigate-claim":
-    case "export-request":
       return typeof message.tabId === "string"
-        ? { type: message.type, nonce: message.nonce, tabId: message.tabId }
+        ? { type: "navigate-claim", nonce: message.nonce, tabId: message.tabId }
         : null;
     case "navigate-confirm":
-      return typeof message.tabId === "string" && isTarget(message.target)
+      return typeof message.tabId === "string" && isDeepLinkTarget(message.target)
         ? {
             type: "navigate-confirm",
             nonce: message.nonce,
@@ -123,10 +137,24 @@ function parseMessage(data: unknown): BridgeMessage | null {
 function parseTransferMessage(data: unknown): TransferMessage | null {
   if (!data || typeof data !== "object") return null;
   const message = data as Record<string, unknown>;
-  if (message.type === "export" && isExport(message.data)) {
-    return { type: "export", data: message.data };
+  switch (message.type) {
+    case "export":
+      return isExport(message.data) ? { type: "export", data: message.data } : null;
+    case "approved":
+    case "declined":
+    case "busy":
+    case "export-error":
+      return { type: message.type };
+    default:
+      return null;
   }
-  return message.type === "export-error" ? { type: "export-error" } : null;
+}
+
+/** A copy this tab asked another tab for. */
+interface PendingTransfer {
+  holderTabId: string;
+  port: PortLike | null;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export function createTabBridge({
@@ -137,61 +165,180 @@ export function createTabBridge({
   onForwarded,
   exportTransfer,
 }: TabBridgeOptions): TabBridge {
-  const openOffers = new Map<string, DeepLinkTarget>();
-  // Offers this tab claimed, so it only sends its export for those
-  const claimedOffers = new Set<string>();
-  let pendingTransfer: { channel: BridgeChannel; timer: ReturnType<typeof setTimeout> } | null =
-    null;
+  // Only the latest offer counts: it is the link this tab's URL asks for now
+  let currentOffer: {
+    nonce: string;
+    target: DeepLinkTarget;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+  // Offers this tab claimed, until the offering tab confirms or the claim expires
+  const claims = new Map<string, ReturnType<typeof setTimeout>>();
+  let transfer: PendingTransfer | null = null;
+  // The request the user is being asked about in this tab, if any
+  let approval: AbortController | null = null;
+  let closed = false;
 
-  const endTransfer = () => {
-    if (!pendingTransfer) return;
-    clearTimeout(pendingTransfer.timer);
-    pendingTransfer.channel.close();
-    pendingTransfer = null;
+  const forgetClaim = (nonce: string) => {
+    clearTimeout(claims.get(nonce));
+    return claims.delete(nonce);
   };
 
-  const requestExport = (
-    transfer: ExportTransferOptions,
-    nonce: string,
-    from: string,
-    target: DeepLinkTarget,
-  ) => {
-    const transferChannel = transfer.openTransferChannel(nonce);
-    const fail = () => {
-      endTransfer();
-      transfer.onCopyFailed();
+  const rememberClaim = (nonce: string) => {
+    if (claims.size >= MAX_CLAIMS) forgetClaim(claims.keys().next().value!);
+    claims.set(nonce, setTimeout(() => claims.delete(nonce), CLAIM_TTL_MS));
+  };
+
+  const clearOffer = () => {
+    if (currentOffer) clearTimeout(currentOffer.timer);
+    currentOffer = null;
+  };
+
+  // --- Receiving a copy -------------------------------------------------------------
+
+  const endTransfer = (ended: PendingTransfer, notifyHolder: boolean) => {
+    clearTimeout(ended.timer);
+    if (ended.port) {
+      // The holder closes the port when it gets "cancel"; closing it here could drop
+      // the message. Anything that still arrives is ignored (transfer !== ended).
+      if (notifyHolder) ended.port.postMessage({ type: "cancel" });
+      else ended.port.close();
+    }
+    if (transfer === ended) transfer = null;
+  };
+
+  const failTransfer = (failed: PendingTransfer, reason: ExportCopyFailure) => {
+    if (transfer !== failed) return;
+    endTransfer(failed, true);
+    exportTransfer?.onCopyStateChange({ phase: "failed", reason });
+  };
+
+  const startTransfer = (options: ExportTransferOptions, holderTabId: string, target: DeepLinkTarget) => {
+    const code = randomCode();
+    const started: PendingTransfer = {
+      holderTabId,
+      port: null,
+      timer: setTimeout(
+        () => failTransfer(started, "timeout"),
+        options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+      ),
     };
-    transferChannel.addEventListener("message", (event) => {
-      const message = parseTransferMessage(event.data);
-      if (!message) return;
-      if (message.type === "export-error") {
-        fail();
+    transfer = started;
+    options.onCopyStateChange({ phase: "awaiting-approval", code });
+
+    void options.broker.requestExport(holderTabId, { code, target }).then((port) => {
+      if (transfer !== started) {
+        // Replaced by a newer link, or this tab closed, while connecting
+        port?.postMessage({ type: "cancel" });
         return;
       }
-      endTransfer();
-      transfer.onExportReceived(message.data);
+      if (!port) {
+        failTransfer(started, "unavailable");
+        return;
+      }
+      started.port = port;
+      port.addEventListener("message", (event) => {
+        // A transfer replaced by a newer one can't change this tab's state any more
+        if (transfer !== started) return;
+        const message = parseTransferMessage(event.data);
+        if (!message) return;
+        switch (message.type) {
+          case "approved":
+            clearTimeout(started.timer);
+            started.timer = setTimeout(
+              () => failTransfer(started, "timeout"),
+              options.copyTimeoutMs ?? DEFAULT_COPY_TIMEOUT_MS,
+            );
+            options.onCopyStateChange({ phase: "copying" });
+            return;
+          case "export":
+            endTransfer(started, false);
+            options.onCopyStateChange(null);
+            options.onExportReceived(message.data);
+            return;
+          case "declined":
+          case "busy":
+            failTransfer(started, message.type);
+            return;
+          case "export-error":
+            failTransfer(started, "error");
+            return;
+        }
+      });
+      port.start?.();
     });
-    pendingTransfer = {
-      channel: transferChannel,
-      timer: setTimeout(fail, transfer.timeoutMs ?? DEFAULT_TRANSFER_TIMEOUT_MS),
-    };
-    // Listening on the transfer channel before asking, so the copy can't be missed
-    channel.postMessage({ type: "export-request", nonce, tabId: from });
-    transfer.onCopyStarted(target);
   };
 
-  const sendExport = (transfer: ExportTransferOptions, nonce: string) => {
-    const transferChannel = transfer.openTransferChannel(nonce);
-    const data = transfer.getExport();
-    try {
-      transferChannel.postMessage(data ? { type: "export", data } : { type: "export-error" });
-    } catch {
-      // The export could not be cloned (e.g. out of memory)
-      transferChannel.postMessage({ type: "export-error" });
-    } finally {
-      transferChannel.close();
-    }
+  const handleClaimForExport = (
+    options: ExportTransferOptions,
+    holderTabId: string,
+    target: DeepLinkTarget,
+  ) => {
+    // That tab is already asked for its export, and it has the newest link too
+    if (transfer?.holderTabId === holderTabId) return;
+    // A newer link that another tab holds replaces the copy still on its way
+    if (transfer) endTransfer(transfer, true);
+    startTransfer(options, holderTabId, target);
   };
+
+  // --- Sending a copy ---------------------------------------------------------------
+
+  const handleExportRequest = (
+    options: ExportTransferOptions,
+    { code, target, port }: { code: string; target: DeepLinkTarget; port: PortLike },
+  ) => {
+    if (!options.getExport() || !canHandle(target)) {
+      port.postMessage({ type: "declined" });
+      return;
+    }
+    if (approval) {
+      // One question at a time; the asking tab can try again
+      port.postMessage({ type: "busy" });
+      return;
+    }
+
+    const controller = new AbortController();
+    approval = controller;
+    const timer = setTimeout(
+      () => controller.abort(),
+      options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+    );
+    const handleCancel = (event: MessageEvent) => {
+      if ((event.data as { type?: unknown } | null)?.type !== "cancel") return;
+      controller.abort();
+      port.close();
+    };
+    port.addEventListener("message", handleCancel);
+    port.start?.();
+    const finish = () => {
+      clearTimeout(timer);
+      port.removeEventListener("message", handleCancel);
+      if (approval === controller) approval = null;
+    };
+    // A withdrawn question is over at once, whether or not the UI answers it
+    controller.signal.addEventListener("abort", finish);
+
+    options
+      .approve({ code, target }, controller.signal)
+      .catch(() => false)
+      .then((allowed) => {
+        finish();
+        if (controller.signal.aborted || closed) return;
+        if (!allowed) {
+          port.postMessage({ type: "declined" });
+          return;
+        }
+        port.postMessage({ type: "approved" });
+        const data = options.getExport();
+        try {
+          port.postMessage(data ? { type: "export", data } : { type: "export-error" });
+        } catch {
+          // The export could not be cloned (e.g. out of memory)
+          port.postMessage({ type: "export-error" });
+        }
+      });
+  };
+
+  // --- Links ------------------------------------------------------------------------
 
   const handleMessage = (event: MessageEvent) => {
     const message = parseMessage(event.data);
@@ -199,20 +346,20 @@ export function createTabBridge({
 
     if (message.type === "navigate-offer") {
       if (canHandle(message.target)) {
-        claimedOffers.add(message.nonce);
+        rememberClaim(message.nonce);
         channel.postMessage({ type: "navigate-claim", nonce: message.nonce, tabId });
       }
       return;
     }
 
     if (message.type === "navigate-claim") {
-      const target = openOffers.get(message.nonce);
-      if (!target) return; // Not our offer, or another tab already claimed it
-      openOffers.delete(message.nonce);
+      // Not our offer, an older or expired one, or another tab already claimed it
+      if (currentOffer?.nonce !== message.nonce) return;
+      const { target } = currentOffer;
+      clearOffer();
 
       if (exportTransfer?.wantsExport()) {
-        // A copy already on its way will show the latest link once it arrives
-        if (!pendingTransfer) requestExport(exportTransfer, message.nonce, message.tabId, target);
+        handleClaimForExport(exportTransfer, message.tabId, target);
         return;
       }
       channel.postMessage({
@@ -225,28 +372,35 @@ export function createTabBridge({
       return;
     }
 
-    // A confirmation or export request goes to the tab whose claim won
-    const claimedHere = claimedOffers.delete(message.nonce);
-    if (!claimedHere || message.tabId !== tabId) return;
-    if (message.type === "export-request") {
-      if (exportTransfer) sendExport(exportTransfer, message.nonce);
-    } else {
-      onNavigate(message.target);
-    }
+    // A confirmation goes to the tab whose claim won; others drop their claim
+    const claimedHere = forgetClaim(message.nonce);
+    if (claimedHere && message.tabId === tabId) onNavigate(message.target);
   };
 
   channel.addEventListener("message", handleMessage);
+  exportTransfer?.broker.onExportRequested((request) =>
+    handleExportRequest(exportTransfer, request),
+  );
 
   return {
     offer: (target) => {
+      clearOffer();
       const nonce = randomId();
-      openOffers.set(nonce, target);
+      currentOffer = { nonce, target, timer: setTimeout(clearOffer, OFFER_TTL_MS) };
       channel.postMessage({ type: "navigate-offer", nonce, target });
     },
+    getPendingCounts: () => ({
+      offers: currentOffer ? 1 : 0,
+      claims: claims.size,
+      transfers: transfer ? 1 : 0,
+      approvals: approval ? 1 : 0,
+    }),
     close: () => {
-      openOffers.clear();
-      claimedOffers.clear();
-      endTransfer();
+      closed = true;
+      clearOffer();
+      for (const nonce of [...claims.keys()]) forgetClaim(nonce);
+      if (transfer) endTransfer(transfer, true);
+      approval?.abort();
       channel.removeEventListener("message", handleMessage);
       channel.close();
     },

@@ -118,6 +118,17 @@ export function buildDeepLinkUrl(
   return url.toString();
 }
 
+/** Validates a deep-link target received from another tab or worker. */
+export function isDeepLinkTarget(value: unknown): value is DeepLinkTarget {
+  if (!value || typeof value !== "object") return false;
+  const { conversationId, messageId } = value as Record<string, unknown>;
+  return (
+    typeof conversationId === "string" &&
+    conversationId.length > 0 &&
+    (messageId === null || typeof messageId === "string")
+  );
+}
+
 export function isSameDeepLinkTarget(
   a: DeepLinkTarget | null,
   b: DeepLinkTarget | null,
