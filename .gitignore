@@ -26,3 +26,7 @@ dist-ssr
 # Python
 __pycache__/
 *.pyc
+
+# Playwright
+test-results/
+playwright-report/

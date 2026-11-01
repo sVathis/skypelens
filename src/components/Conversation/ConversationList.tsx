@@ -40,6 +40,7 @@ const ConversationItem = memo(function ConversationItem({
 	return (
 		<UnstyledButton
 			onClick={handleClick}
+			data-conversation-id={conversation.id}
 			px="md"
 			py="sm"
 			bg={isSelected ? "light-dark(var(--mantine-color-blue-0), var(--mantine-color-dark-6))" : undefined}

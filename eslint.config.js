@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 
 // tseslint.config() resolves `extends`, which plain flat-config arrays do not support
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'test-results', 'playwright-report'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -25,5 +25,10 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
     },
+  },
+  {
+    // Browser tests and their config run in Node
+    files: ['e2e/**/*.ts', 'playwright.config.ts'],
+    languageOptions: { globals: globals.node },
   },
 )

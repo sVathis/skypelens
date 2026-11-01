@@ -43,6 +43,24 @@
       "conversation_id": "8:live:.cid.replaced",
       "message_id": "1700000000003",
       "url": "http://localhost:5173/#conversationId=8%3Alive%3A.cid.replaced&messageId=1700000000003"
+    },
+    {
+      "base_url": "http://localhost:5173/?note=a%20b",
+      "conversation_id": "8:live:.cid.query",
+      "message_id": "1700000000004",
+      "url": "http://localhost:5173/?note=a%20b#conversationId=8%3Alive%3A.cid.query&messageId=1700000000004"
+    },
+    {
+      "base_url": "HTTP://LocalHost:80/viewer/?q=a+b&x=%2B&conversationId=old&&empty=",
+      "conversation_id": "8:live:.cid.query",
+      "message_id": "1700000000005",
+      "url": "http://localhost/viewer/?q=a+b&x=%2B&empty=#conversationId=8%3Alive%3A.cid.query&messageId=1700000000005"
+    },
+    {
+      "base_url": "http://10.0.0.10:5173/my viewer/?note=a b&ελ=1&quote='x'",
+      "conversation_id": "8:live:.cid.query",
+      "message_id": "1700000000006",
+      "url": "http://10.0.0.10:5173/my%20viewer/?note=a%20b&%CE%B5%CE%BB=1&quote=%27x%27#conversationId=8%3Alive%3A.cid.query&messageId=1700000000006"
     }
   ]
 }

@@ -8,6 +8,7 @@
 		"build": "tsc -b && bunx --bun vite build",
 		"lint": "eslint .",
 		"test": "vitest run",
+		"test:e2e": "playwright test",
 		"preview": "vite preview"
 	},
 	"dependencies": {
@@ -23,6 +24,7 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.39.1",
+		"@playwright/test": "^1.64.1",
 		"@types/dompurify": "^3.2.0",
 		"@types/node": "^24.10.0",
 		"@types/react": "^18.3.26",

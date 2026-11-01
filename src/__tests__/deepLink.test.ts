@@ -74,6 +74,15 @@ describe("deep link URLs", () => {
     );
   });
 
+  it("keeps unrelated query parameters byte for byte", () => {
+    // Re-serializing would turn %20 into "+" and the URL would no longer match the
+    // report link before the "#", so following it would reload the tab
+    expect(getAppBaseUrl("http://h/?note=a%20b&q=a+b&x=%2B&conversationId=old&&empty=#y")).toBe(
+      "http://h/?note=a%20b&q=a+b&x=%2B&empty=",
+    );
+    expect(getAppBaseUrl("http://h/?conversationId=old")).toBe("http://h/");
+  });
+
   it("treats a URL without link parameters as no link", () => {
     expect(parseDeepLink("")).toEqual({ kind: "none" });
     expect(parseDeepLink("?theme=dark")).toEqual({ kind: "none" });

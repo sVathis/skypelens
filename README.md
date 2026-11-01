@@ -139,7 +139,7 @@ Hover a message and click the 🔗 icon next to it ("Copy link to message"). The
 python tools/skypelens_links.py --findings out/findings.json --csv out/findings.csv --conversation-json conversation.json
 ```
 
-This adds a `skypelens_url` field/column. Set the base URL to exactly the address you open SkypeLens at (same host, port and path): a link reuses an open SkypeLens tab without reloading only if everything before the `#` matches. Use `--skypelens-base-url` (or the `SKYPELENS_BASE_URL` environment variable) for a non-default SkypeLens location, and `--skypelens-conversation-id` when the JSON contains several conversations.
+This adds a `skypelens_url` field/column. Set the base URL to the address you open SkypeLens at (same host, port, path and query): a link reuses an open SkypeLens tab without reloading only if everything before the `#` matches. The helper writes the base URL the way the browser shows it (lower-case host, no default port, spaces as `%20`) and keeps other query parameters byte for byte, as SkypeLens does when it updates its own URL. Use `--skypelens-base-url` (or the `SKYPELENS_BASE_URL` environment variable) for a non-default SkypeLens location, and `--skypelens-conversation-id` when the JSON contains several conversations.
 
 **Integrate into `skype_analyze.py`** so `report.html` and `report.md` get a "View in SkypeLens" link per finding, next to the existing `history.html#m…` link (which is kept as a fallback). Copy `tools/skypelens_links.py` next to `skype_analyze.py`, then:
 
@@ -174,7 +174,9 @@ For this to work:
 - The links must not have `rel="noopener"` or `rel="noreferrer"` (the helper leaves them out); either makes every click open a new tab.
 - `report.md` viewers can't target a named tab, so Markdown links open a new tab each time. If another SkypeLens tab has the export loaded, the new tab hands the link over to it.
 
-The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs.
+The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs and builds the same URL before the `#`.
+
+[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar) must land in that same tab and show the new message, without reloading the tab or asking for the export again.
 
 ## 📦 Installation
 
@@ -201,6 +203,10 @@ bun run build
 # Run tests / lint
 bun run test
 bun run lint
+
+# Browser tests (Chromium and Firefox; downloads the browsers once)
+bunx playwright install chromium firefox
+bun run test:e2e
 ```
 
 ### Accessing the App

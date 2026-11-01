@@ -11,6 +11,7 @@ from skypelens_links import (
     build_skypelens_url,
     finding_links_html,
     finding_links_markdown,
+    normalize_base_url,
     resolve_conversation_id,
 )
 
@@ -53,6 +54,31 @@ class BuildUrlTests(unittest.TestCase):
     def test_replaces_existing_link_parameters(self):
         url = build_skypelens_url("new", "2", "http://h/?conversationId=old&messageId=1&x=y#old")
         self.assertEqual(url, "http://h/?x=y#conversationId=new&messageId=2")
+
+
+class NormalizeBaseUrlTests(unittest.TestCase):
+    # The result must equal what SkypeLens' own tab shows before the "#", or following
+    # a report link reloads the tab (see getAppBaseUrl in src/utils/deepLink.ts)
+
+    def test_keeps_query_bytes(self):
+        self.assertEqual(
+            normalize_base_url("http://h/?note=a%20b&q=a+b&x=%2B&conversationId=old&&empty="),
+            "http://h/?note=a%20b&q=a+b&x=%2B&empty=",
+        )
+
+    def test_matches_browser_normalization(self):
+        for base, expected in [
+            ("HTTPS://Example.GitHub.io:443/skypelens/", "https://example.github.io/skypelens/"),
+            ("http://[::1]:5173", "http://[::1]:5173/"),
+            ("http://h/a b/?x=a b&y='z'", "http://h/a%20b/?x=a%20b&y=%27z%27"),
+            (" http://10.0.0.10:5173/ ", "http://10.0.0.10:5173/"),
+        ]:
+            with self.subTest(base=base):
+                self.assertEqual(normalize_base_url(base), expected)
+
+    def test_rejects_invalid_port(self):
+        with self.assertRaises(ValueError):
+            normalize_base_url("http://h:99999/")
 
 
 class ConversationIdTests(unittest.TestCase):

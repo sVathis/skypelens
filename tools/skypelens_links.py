@@ -32,7 +32,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, unquote_plus, urlencode, urlsplit, urlunsplit
 
 DEFAULT_SKYPELENS_BASE_URL = "http://localhost:5173/"
 SKYPELENS_BASE_URL_ENV = "SKYPELENS_BASE_URL"
@@ -59,24 +59,66 @@ def build_skypelens_url(
     if message_id == "":
         raise ValueError("message_id must not be empty")
 
-    parts = urlsplit(base_url)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        raise ValueError(f"base_url must be an absolute http(s) URL, got {base_url!r}")
-
-    # Older links put the identifiers in the query; drop them from the base
-    kept = [
-        (key, value)
-        for key, value in parse_qsl(parts.query, keep_blank_values=True)
-        if key not in (CONVERSATION_ID_PARAM, MESSAGE_ID_PARAM)
-    ]
     link = [(CONVERSATION_ID_PARAM, str(conversation_id))]
     if message_id is not None:
         link.append((MESSAGE_ID_PARAM, str(message_id)))
-
     # quote(safe="") percent-encodes ":", "@", "+", "/", "&", "=", "#" and spaces
-    query = urlencode(kept, quote_via=quote, safe="")
     fragment = urlencode(link, quote_via=quote, safe="")
-    return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", query, fragment))
+    return f"{normalize_base_url(base_url)}#{fragment}"
+
+
+# Characters a browser percent-encodes when it parses a URL (WHATWG URL standard), in
+# addition to controls, spaces and non-ASCII
+_PATH_ENCODE_SET = '"#<>?`{}'
+_QUERY_ENCODE_SET = "\"#<>'"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _percent_encode(text: str, encode_set: str) -> str:
+    # Existing %XX escapes are kept as they are, as browsers do
+    return "".join(
+        ch if " " < ch < "\x7f" and ch not in encode_set else quote(ch, safe="")
+        for ch in text
+    )
+
+
+def _is_link_param(query_part: str) -> bool:
+    name = unquote_plus(query_part.split("=", 1)[0])
+    return name in (CONVERSATION_ID_PARAM, MESSAGE_ID_PARAM)
+
+
+def normalize_base_url(base_url: str) -> str:
+    """Return ``base_url`` as SkypeLens' own URL would read in the browser, minus the hash.
+
+    Mirrors ``getAppBaseUrl`` in src/utils/deepLink.ts: link parameters are dropped from
+    the query and every other query parameter is kept byte for byte (``%20`` stays
+    ``%20``). Like a browser, lower-cases the scheme and host, drops a default port and
+    percent-encodes spaces and non-ASCII characters. Report links reuse an open SkypeLens
+    tab without reloading only when this part matches that tab's URL exactly.
+    """
+    parts = urlsplit(base_url.strip())
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.hostname:
+        raise ValueError(f"base_url must be an absolute http(s) URL, got {base_url!r}")
+
+    host = parts.hostname  # already lower-cased
+    if ":" in host:
+        host = f"[{host}]"  # IPv6
+    port = parts.port  # raises ValueError for an invalid port
+    if port is not None and port != _DEFAULT_PORTS[scheme]:
+        host = f"{host}:{port}"
+    userinfo, _, _ = parts.netloc.rpartition("@")
+    netloc = f"{userinfo}@{host}" if userinfo else host
+
+    path = _percent_encode(parts.path or "/", _PATH_ENCODE_SET)
+    # Older links put the identifiers in the query; drop them from the base
+    kept = [
+        _percent_encode(part, _QUERY_ENCODE_SET)
+        for part in parts.query.split("&")
+        if part and not _is_link_param(part)
+    ]
+    query = "&".join(kept)
+    return urlunsplit((scheme, netloc, path, query, ""))
 
 
 def resolve_conversation_id(data: Any, explicit: Optional[str] = None) -> str:

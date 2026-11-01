@@ -72,15 +72,27 @@ export function parseDeepLinkLocation(location: DeepLinkLocation): DeepLinkParse
   return fromHash.kind === "none" ? parseDeepLink(location.search) : fromHash;
 }
 
+function isLinkParam(queryPart: string): boolean {
+  const [name] = new URLSearchParams(queryPart).keys();
+  return name === CONVERSATION_ID_PARAM || name === MESSAGE_ID_PARAM;
+}
+
 /**
  * Returns the URL the app is served from without deep-link parameters or hash, so
- * links work on any host, port or sub-path (e.g. GitHub Pages). Unrelated query
- * parameters are kept.
+ * links work on any host, port or sub-path (e.g. GitHub Pages).
+ *
+ * Unrelated query parameters are kept byte for byte (not re-serialized through
+ * URLSearchParams, which would turn `%20` into `+`). tools/skypelens_links.py applies
+ * the same rule, so a report link and this tab's URL match before the `#` and following
+ * the link doesn't reload the page.
  */
 export function getAppBaseUrl(href: string = window.location.href): string {
   const url = new URL(href);
-  url.searchParams.delete(CONVERSATION_ID_PARAM);
-  url.searchParams.delete(MESSAGE_ID_PARAM);
+  const kept = url.search
+    .slice(1)
+    .split("&")
+    .filter((part) => part !== "" && !isLinkParam(part));
+  url.search = kept.length > 0 ? `?${kept.join("&")}` : "";
   url.hash = "";
   return url.toString();
 }
