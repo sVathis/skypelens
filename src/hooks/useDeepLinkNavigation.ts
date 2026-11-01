@@ -7,8 +7,14 @@ import {
   type DeepLinkLocation,
   type DeepLinkTarget,
 } from "../utils/deepLink";
-import { createTabBridge, type TabBridge } from "../utils/tabBridge";
-import { CONVERSATION_ID_PARAM, TAB_BRIDGE_CHANNEL } from "../constants/deepLink";
+import { createTabBridge, type ExportCopyState, type TabBridge } from "../utils/tabBridge";
+import { connectExportBroker } from "../utils/connectExportBroker";
+import { randomId } from "../utils/random";
+import {
+  CONVERSATION_ID_PARAM,
+  REPORT_TAB_NAME,
+  TAB_BRIDGE_CHANNEL,
+} from "../constants/deepLink";
 import { canShowDeepLink } from "../utils/messageLocator";
 
 // The parts of the Navigation API used here (not yet in TypeScript's DOM types)
@@ -70,12 +76,29 @@ function syncFromLocation({ force = false } = {}) {
   applyLocationToStore();
 }
 
+/** A request from another tab for this tab's export, waiting for the user's answer. */
+export interface ExportApprovalRequest {
+  code: string;
+  target: DeepLinkTarget;
+  respond: (allowed: boolean) => void;
+}
+
 /**
- * Keeps the URL and the store in sync and forwards links between SkypeLens tabs.
- * Returns the deep link this tab handed over to another tab, if any.
+ * Keeps the URL and the store in sync and passes links (or, with the user's approval,
+ * a copy of the export to the report's tab) between SkypeLens tabs. Returns:
+ * - `forwardedTarget`: the deep link this tab handed over to another tab, while it has
+ *   no export;
+ * - `exportCopy`: progress of an export copy this tab asked for, while it has none;
+ * - `approvalRequest`: another tab asking for this tab's export.
  */
-export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | null } {
+export function useDeepLinkNavigation(): {
+  forwardedTarget: DeepLinkTarget | null;
+  exportCopy: ExportCopyState;
+  approvalRequest: ExportApprovalRequest | null;
+} {
   const [forwardedTarget, setForwardedTarget] = useState<DeepLinkTarget | null>(null);
+  const [exportCopy, setExportCopy] = useState<ExportCopyState>(null);
+  const [approvalRequest, setApprovalRequest] = useState<ExportApprovalRequest | null>(null);
   const bridgeRef = useRef<TabBridge | null>(null);
   const hasExport = useMessageStore((state) => state.exportData !== null);
   const requestedDeepLink = useMessageStore((state) => state.requestedDeepLink);
@@ -112,8 +135,11 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
 
+    const tabId = randomId();
+    const broker = connectExportBroker(tabId);
     const bridge = createTabBridge({
       channel: new BroadcastChannel(TAB_BRIDGE_CHANNEL),
+      tabId,
       // Claim only if this export has the message, not just the conversation
       canHandle: (target) =>
         canShowDeepLink(useMessageStore.getState().conversations, target),
@@ -128,11 +154,40 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
           setForwardedTarget(target);
         }
       },
+      exportTransfer: broker
+        ? {
+            broker,
+            // Only the tab report.html links go to asks for a copy: the report keeps
+            // reusing it. Other fresh tabs (report.md links, pasted links) hand the link
+            // over instead of adding another copy of the export each.
+            wantsExport: () => window.name === REPORT_TAB_NAME,
+            getExport: () => useMessageStore.getState().exportData,
+            exportHas: (data, target) => canShowDeepLink(data.conversations, target),
+            approve: (request, signal) =>
+              new Promise<boolean>((resolve) => {
+                const answer = (allowed: boolean) => {
+                  setApprovalRequest((current) => (current?.respond === answer ? null : current));
+                  resolve(allowed);
+                };
+                // The asking tab gave up (newer link, timeout, closed)
+                signal.addEventListener("abort", () => answer(false));
+                setApprovalRequest({ ...request, respond: answer });
+              }),
+            onCopyStateChange: setExportCopy,
+            onExportReceived: (data) => {
+              const store = useMessageStore.getState();
+              // Opens the link this tab asks for now, which may be newer than the one
+              // the copy was first asked for
+              if (!store.exportData) store.setExportData(data);
+            },
+          }
+        : undefined,
     });
     bridgeRef.current = bridge;
 
     return () => {
       bridge.close();
+      broker?.close();
       bridgeRef.current = null;
     };
   }, []);
@@ -141,11 +196,14 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
   useEffect(() => {
     if (!hasExport && requestedDeepLink) {
       setForwardedTarget(null);
+      setExportCopy((state) => (state?.phase === "failed" ? null : state));
       bridgeRef.current?.offer(requestedDeepLink);
     }
   }, [hasExport, requestedDeepLink]);
 
-  return { forwardedTarget: hasExport ? null : forwardedTarget };
+  return hasExport
+    ? { forwardedTarget: null, exportCopy: null, approvalRequest }
+    : { forwardedTarget, exportCopy, approvalRequest: null };
 }
 
 /**

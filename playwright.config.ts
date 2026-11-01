@@ -16,7 +16,11 @@ export default defineConfig({
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },
   ],
   webServer: {
-    command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${PORT} --strictPort`,
+    // SKYPELENS_E2E_PREVIEW=1 tests the production build instead of the dev server.
+    // Tests that inspect the store (window.__SKYPELENS_STORE__) need the dev server.
+    command: process.env.SKYPELENS_E2E_PREVIEW
+      ? `node node_modules/vite/bin/vite.js build && node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port ${PORT} --strictPort`
+      : `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: SKYPELENS_E2E_BASE_URL,
     reuseExistingServer: !process.env.CI,
   },

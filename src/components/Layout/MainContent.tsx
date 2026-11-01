@@ -6,6 +6,7 @@ import { useMessageStore, useExportData } from "../../store/messageStore";
 import type { SkypeExport } from "../../types/messages";
 import { MessageView } from "../Message/MessageView";
 import { useDeepLinkNavigation } from "../../hooks/useDeepLinkNavigation";
+import { ExportApprovalDialog, ExportCopyNotice } from "./ExportTransfer";
 
 export function MainContent() {
 	const { setExportData } = useMessageStore();
@@ -14,7 +15,7 @@ export function MainContent() {
 	const navigationError = useMessageStore((state) => state.navigationError);
 	const setNavigationError = useMessageStore((state) => state.setNavigationError);
 	const unloadExport = useMessageStore((state) => state.unloadExport);
-	const { forwardedTarget } = useDeepLinkNavigation();
+	const { forwardedTarget, exportCopy, approvalRequest } = useDeepLinkNavigation();
 
 	const handleFileProcessed = useCallback((data: SkypeExport) => {
 		setExportData(data);
@@ -44,7 +45,9 @@ export function MainContent() {
 	);
 
 	if (!exportData) {
-		const notice = forwardedTarget ? (
+		const notice = exportCopy ? (
+			<ExportCopyNotice state={exportCopy} />
+		) : forwardedTarget ? (
 			<Alert icon={<IconExternalLink size={16} />} color="teal" title="Opened in your other SkypeLens tab">
 				<Text size="sm">
 					Another SkypeLens tab already has this export loaded and is now showing the linked message. Switch to that tab, or load the export below to view it here.
@@ -77,6 +80,7 @@ export function MainContent() {
 		<Stack h="100%" gap={0} style={{ overflow: "auto" }}>
 			{errorAlert}
 			<MessageView />
+			<ExportApprovalDialog request={approvalRequest} />
 		</Stack>
 	);
 }
