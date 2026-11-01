@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTabBridge, type BridgeChannel } from "../utils/tabBridge";
 import type { DeepLinkTarget } from "../utils/deepLink";
-import type { Conversation } from "../types/messages";
+import type { Conversation, SkypeExport } from "../types/messages";
 import { canShowDeepLink } from "../utils/messageLocator";
 import {
   CONVERSATION_ID,
@@ -135,6 +135,178 @@ describe("tab bridge", () => {
       if (sent) expect(Object.keys(sent).sort()).toEqual(["conversationId", "messageId"]);
     }
     expect(loaded.onNavigate).toHaveBeenCalledWith(target);
+  });
+
+  describe("copying the export", () => {
+    const exportData: SkypeExport = {
+      userId: "8:live:owner",
+      exportDate: "2024-12-31T00:00:00.000Z",
+      conversations: [createSyntheticConversation(20, "8:live:a").conversation],
+      mediaFiles: new Map([["0-abc.1.jpg", new File(["synthetic"], "0-abc.1.jpg")]]),
+    };
+
+    /** Like BroadcastChannel: one bus per channel name. */
+    function createTransferBuses() {
+      const buses = new Map<string, ReturnType<typeof createBus>>();
+      return {
+        buses,
+        open: (nonce: string) => {
+          if (!buses.has(nonce)) buses.set(nonce, createBus());
+          return buses.get(nonce)!.open();
+        },
+      };
+    }
+
+    function transferTab(
+      bus: ReturnType<typeof createBus>,
+      transfers: ReturnType<typeof createTransferBuses>,
+      options: {
+        loaded: boolean;
+        wantsExport?: boolean;
+        /** A tab running an older SkypeLens claims links but can't send its export. */
+        canSendExport?: boolean;
+        timeoutMs?: number;
+      },
+    ) {
+      const { loaded, wantsExport = false, canSendExport = true, timeoutMs } = options;
+      const handlers = {
+        onNavigate: vi.fn(),
+        onForwarded: vi.fn(),
+        getExport: vi.fn(() => (loaded ? exportData : null)),
+        onCopyStarted: vi.fn(),
+        onExportReceived: vi.fn(),
+        onCopyFailed: vi.fn(),
+      };
+      const bridge = createTabBridge({
+        channel: bus.open(),
+        canHandle: (t) => loaded && t.conversationId === target.conversationId,
+        onNavigate: handlers.onNavigate,
+        onForwarded: handlers.onForwarded,
+        exportTransfer: canSendExport
+          ? {
+              openTransferChannel: transfers.open,
+              wantsExport: () => wantsExport,
+              getExport: handlers.getExport,
+              onCopyStarted: handlers.onCopyStarted,
+              onExportReceived: handlers.onExportReceived,
+              onCopyFailed: handlers.onCopyFailed,
+              timeoutMs,
+            }
+          : undefined,
+      });
+      return { bridge, ...handlers };
+    }
+
+    it("gives the report's tab a copy of the export instead of handing the link over", async () => {
+      const bus = createBus();
+      const transfers = createTransferBuses();
+      const loaded = transferTab(bus, transfers, { loaded: true });
+      const reportTab = transferTab(bus, transfers, { loaded: false, wantsExport: true });
+
+      reportTab.bridge.offer(target);
+      await flush();
+
+      expect(reportTab.onCopyStarted).toHaveBeenCalledWith(target);
+      expect(reportTab.onExportReceived).toHaveBeenCalledTimes(1);
+      const [received] = reportTab.onExportReceived.mock.calls[0];
+      // A copy, not shared memory
+      expect(received).not.toBe(exportData);
+      expect(received.conversations).toEqual(exportData.conversations);
+      expect(received.userId).toBe(exportData.userId);
+      // Browsers clone File objects; jsdom's File doesn't survive Node's structuredClone,
+      // so only the media index is checked here
+      expect([...received.mediaFiles.keys()]).toEqual(["0-abc.1.jpg"]);
+      expect(reportTab.onCopyFailed).not.toHaveBeenCalled();
+      // The report's tab shows the link itself
+      expect(loaded.onNavigate).not.toHaveBeenCalled();
+      expect(reportTab.onForwarded).not.toHaveBeenCalled();
+    });
+
+    it("sends the export only to the requesting tab, from one tab", async () => {
+      const bus = createBus();
+      const transfers = createTransferBuses();
+      const mainChannel: unknown[] = [];
+      bus.open().addEventListener("message", (event) => mainChannel.push(event.data));
+      const loadedA = transferTab(bus, transfers, { loaded: true });
+      const loadedB = transferTab(bus, transfers, { loaded: true });
+      const otherFresh = transferTab(bus, transfers, { loaded: false });
+      const reportTab = transferTab(bus, transfers, { loaded: false, wantsExport: true });
+
+      reportTab.bridge.offer(target);
+      await flush();
+
+      expect(reportTab.onExportReceived).toHaveBeenCalledTimes(1);
+      expect(loadedA.getExport.mock.calls.length + loadedB.getExport.mock.calls.length).toBe(1);
+      expect(otherFresh.onExportReceived).not.toHaveBeenCalled();
+      // The shared channel carries identifiers only; the export goes over its own channel
+      expect(mainChannel.length).toBeGreaterThan(0);
+      for (const message of mainChannel) expect(message).not.toHaveProperty("data");
+      expect(transfers.buses.size).toBe(1);
+    });
+
+    it("still hands the link over from tabs that don't want a copy", async () => {
+      const bus = createBus();
+      const transfers = createTransferBuses();
+      const loaded = transferTab(bus, transfers, { loaded: true });
+      const markdownTab = transferTab(bus, transfers, { loaded: false, wantsExport: false });
+
+      markdownTab.bridge.offer(target);
+      await flush();
+
+      expect(loaded.onNavigate).toHaveBeenCalledWith(target);
+      expect(markdownTab.onForwarded).toHaveBeenCalledWith(target);
+      expect(loaded.getExport).not.toHaveBeenCalled();
+      expect(transfers.buses.size).toBe(0);
+    });
+
+    it("reports a failure when the other tab no longer has the export", async () => {
+      const bus = createBus();
+      const transfers = createTransferBuses();
+      let unloaded = false;
+      const loaded = transferTab(bus, transfers, { loaded: true });
+      loaded.getExport.mockImplementation(() => (unloaded ? null : exportData));
+      const reportTab = transferTab(bus, transfers, { loaded: false, wantsExport: true });
+
+      unloaded = true;
+      reportTab.bridge.offer(target);
+      await flush();
+
+      expect(reportTab.onCopyFailed).toHaveBeenCalledTimes(1);
+      expect(reportTab.onExportReceived).not.toHaveBeenCalled();
+    });
+
+    it("gives up when no copy arrives", async () => {
+      const bus = createBus();
+      const transfers = createTransferBuses();
+      transferTab(bus, transfers, { loaded: true, canSendExport: false });
+      const reportTab = transferTab(bus, transfers, {
+        loaded: false,
+        wantsExport: true,
+        timeoutMs: 5,
+      });
+
+      reportTab.bridge.offer(target);
+      await flush();
+      expect(reportTab.onCopyStarted).toHaveBeenCalled();
+      expect(reportTab.onCopyFailed).not.toHaveBeenCalled();
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reportTab.onCopyFailed).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks for one copy while another is on its way", async () => {
+      const bus = createBus();
+      const transfers = createTransferBuses();
+      const loaded = transferTab(bus, transfers, { loaded: true });
+      const reportTab = transferTab(bus, transfers, { loaded: false, wantsExport: true });
+
+      reportTab.bridge.offer(target);
+      reportTab.bridge.offer({ ...target, messageId: "1700000000002" });
+      await flush();
+
+      expect(loaded.getExport).toHaveBeenCalledTimes(1);
+      expect(reportTab.onExportReceived).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("stops listening when closed", async () => {

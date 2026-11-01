@@ -120,7 +120,10 @@ https://thongtech.github.io/skypelens/#conversationId=19%3Aabc.def_01%40thread.s
 
 - **Export already loaded in this tab** (a report link aimed at this tab, a link pasted into its address bar, or Back/Forward): SkypeLens selects the conversation, loads as much history as needed, scrolls the message to the centre and highlights it, with the surrounding messages around it. Any active search is cleared so it can't hide the target.
 - **Fresh tab, nothing loaded**: SkypeLens keeps nothing between visits, so it shows the upload screen with a note about the link. Load the export and it jumps to the message automatically.
-- **Fresh tab while another SkypeLens tab has the export loaded**: the link is handed to a tab whose export contains that message (not just the conversation), which navigates to it. Only the two IDs are passed between tabs; the export itself never leaves the tab it was loaded into.
+- **Fresh tab while another SkypeLens tab has the export loaded**: a tab whose export contains that message (not just the conversation) takes over.
+  - If the fresh tab is the one `report.html` links open in (see below), it copies the export from that tab and shows the message itself, so later report links open there without loading anything.
+  - Any other fresh tab (e.g. from a `report.md` link or a pasted link) hands the link over: the tab with the export jumps to the message, and the fresh tab says so. Only the two IDs are passed, so this doesn't add another copy of the export.
+  - The export copy goes only to the tab that asked for it, and stays in this browser: tabs share it directly, nothing is uploaded or saved. While both tabs are open, each holds its own copy in memory; close the one you no longer need.
 - If the conversation or message is not in the loaded export, SkypeLens says so instead of opening something else. **Load another export** in that message lets you load the right export (e.g. a newer one); the link then completes.
 - If the linked message is one SkypeLens folds into another bubble (a translation pair), that bubble is highlighted and a note explains why. If it is a message SkypeLens doesn't display (e.g. an album placeholder), the nearest displayed message gets a dashed highlight and a note.
 - Clicking a conversation in the sidebar records it in browser history, so Back returns to the previous conversation or linked message.
@@ -166,11 +169,11 @@ Write `skypelens_url` to `findings.json`/`findings.csv` too if you want it there
 
 **Clicking through findings without re-uploading.** In `report.html`, every "View in SkypeLens" link opens in the same browser tab, named `skypelens`:
 
-1. The first click opens that tab. Load the export there once.
+1. The first click opens that tab. Load the export there once. If another SkypeLens tab already has it loaded (say, one you opened yourself), the new tab copies it from there instead of asking.
 2. Every later click goes back to that tab and only changes the part after `#`, so SkypeLens jumps to the new message immediately, without reloading or asking for the export again. Clicking the same finding again after scrolling away jumps back to it too, where the browser supports the [Navigation API](https://developer.mozilla.org/docs/Web/API/Navigation_API) (current Chrome, Edge, Firefox and Safari).
 
 For this to work:
-- Open SkypeLens from the first report link rather than in a tab you opened yourself. Browsers only let a page reuse a tab it opened.
+- Report links can't send you to a SkypeLens tab you opened yourself: browsers only let a page reuse a tab it opened. That's why the report's own tab takes a copy of the export instead.
 - The links must not have `rel="noopener"` or `rel="noreferrer"` (the helper leaves them out); either makes every click open a new tab.
 - `report.md` viewers can't target a named tab, so Markdown links open a new tab each time. If another SkypeLens tab has the export loaded, the new tab hands the link over to it.
 
@@ -178,7 +181,7 @@ For this to work:
 
 The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs and builds the same URL before the `#`.
 
-[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar, and one on the same finding after scrolling away) must land in that same tab and show its message, without reloading the tab or asking for the export again.
+[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar, and one on the same finding after scrolling away) must land in that same tab and show its message, without reloading the tab or asking for the export again. [`e2e/exportCopy.spec.ts`](e2e/exportCopy.spec.ts) loads the export in a tab opened by hand instead, and checks that the report's tab copies it from there, while a link that opens a new tab each time only hands the link over.
 
 ## 📦 Installation
 

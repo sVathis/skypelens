@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { SKYPELENS_E2E_BASE_URL } from "../playwright.config";
 import type { DeepLinkTarget } from "../src/utils/deepLink";
 import {
@@ -9,6 +9,7 @@ import {
   createSyntheticExport,
   messageIdFor,
 } from "../src/__tests__/fixtures/syntheticExport";
+import { beforeHash, linkedMessage, markTab, readMark, reportHtml, uploadInput } from "./helpers";
 
 const MESSAGE_COUNT = 3000;
 
@@ -18,32 +19,6 @@ const FINDINGS: DeepLinkTarget[] = [
   { conversationId: GROUP_CONVERSATION_ID, messageId: messageIdFor(40) },
   { conversationId: CONVERSATION_ID, messageId: messageIdFor(1200) },
 ];
-
-// Built like tools/skypelens_links.py does (base URL kept byte for byte, IDs in the
-// hash), independently of SkypeLens' own buildDeepLinkUrl
-const pythonStyleUrl = (baseUrl: string, { conversationId, messageId }: DeepLinkTarget) =>
-  `${baseUrl}#conversationId=${encodeURIComponent(conversationId)}&messageId=${encodeURIComponent(messageId ?? "")}`;
-
-// The markup of finding_links_html() (its tests pin it): a named target and no
-// rel="noopener"/"noreferrer"
-function reportHtml(baseUrl: string) {
-  const links = FINDINGS.map((target) => {
-    const href = pythonStyleUrl(baseUrl, target).replaceAll("&", "&amp;");
-    return `<li><a class="skypelens-link" href="${href}" target="skypelens">View in SkypeLens</a></li>`;
-  });
-  return `<!doctype html><meta charset="utf-8"><title>Synthetic report</title><ul>${links.join("")}</ul>`;
-}
-
-const linkedMessage = (page: Page, messageId: string | null) =>
-  page.locator(`[data-deeplink-target][data-message-id="${messageId}"]`);
-const uploadInput = (page: Page) => page.locator('input[type="file"][accept]');
-const beforeHash = (url: string) => url.split("#")[0];
-
-// Survives only as long as the tab is never reloaded
-const markTab = (page: Page) =>
-  page.evaluate(() => ((window as Window & { e2eMarker?: string }).e2eMarker = "not reloaded"));
-const readMark = (page: Page) =>
-  page.evaluate(() => (window as Window & { e2eMarker?: string }).e2eMarker);
 
 for (const baseUrl of [
   SKYPELENS_E2E_BASE_URL,
@@ -58,7 +33,7 @@ for (const baseUrl of [
     const exportPath = testInfo.outputPath("messages.json");
     const reportPath = testInfo.outputPath("report.html");
     await writeFile(exportPath, JSON.stringify(createSyntheticExport(MESSAGE_COUNT).exportData));
-    await writeFile(reportPath, reportHtml(baseUrl));
+    await writeFile(reportPath, reportHtml(baseUrl, FINDINGS.map((target) => ({ target }))));
 
     let openedPages = 0;
     context.on("page", () => openedPages++);

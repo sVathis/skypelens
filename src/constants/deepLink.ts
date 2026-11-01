@@ -1,5 +1,5 @@
-// Query parameter names of the canonical deep-link URL:
-// <app base>?conversationId=<Conversation.id>&messageId=<Message.id>
+// Parameter names of the canonical deep-link URL:
+// <app base>#conversationId=<Conversation.id>&messageId=<Message.id>
 export const CONVERSATION_ID_PARAM = "conversationId";
 export const MESSAGE_ID_PARAM = "messageId";
 
@@ -17,3 +17,8 @@ export const DEEP_LINK_MAX_SCROLL_FRAMES = 120;
 export const COPY_FEEDBACK_DURATION = 1500;
 
 export const TAB_BRIDGE_CHANNEL = "skypelens-deep-links-v1";
+
+// Name of the tab report.html links open in (SKYPELENS_WINDOW_NAME in
+// tools/skypelens_links.py). The report keeps reusing that tab, so it is the one tab
+// worth giving a copy of an export loaded in another tab.
+export const REPORT_TAB_NAME = "skypelens";

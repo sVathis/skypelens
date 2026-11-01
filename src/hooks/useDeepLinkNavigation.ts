@@ -8,7 +8,11 @@ import {
   type DeepLinkTarget,
 } from "../utils/deepLink";
 import { createTabBridge, type TabBridge } from "../utils/tabBridge";
-import { CONVERSATION_ID_PARAM, TAB_BRIDGE_CHANNEL } from "../constants/deepLink";
+import {
+  CONVERSATION_ID_PARAM,
+  REPORT_TAB_NAME,
+  TAB_BRIDGE_CHANNEL,
+} from "../constants/deepLink";
 import { canShowDeepLink } from "../utils/messageLocator";
 
 // The parts of the Navigation API used here (not yet in TypeScript's DOM types)
@@ -70,12 +74,21 @@ function syncFromLocation({ force = false } = {}) {
   applyLocationToStore();
 }
 
+/** Progress of copying an export from another SkypeLens tab into this one. */
+export type ExportCopyState = "copying" | "failed" | null;
+
 /**
- * Keeps the URL and the store in sync and forwards links between SkypeLens tabs.
- * Returns the deep link this tab handed over to another tab, if any.
+ * Keeps the URL and the store in sync and passes links (or, to the report's tab, a
+ * copy of the export) between SkypeLens tabs. While this tab has no export, returns
+ * the deep link it handed over to another tab, if any, and the state of an export
+ * copy on its way.
  */
-export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | null } {
+export function useDeepLinkNavigation(): {
+  forwardedTarget: DeepLinkTarget | null;
+  exportCopy: ExportCopyState;
+} {
   const [forwardedTarget, setForwardedTarget] = useState<DeepLinkTarget | null>(null);
+  const [exportCopy, setExportCopy] = useState<ExportCopyState>(null);
   const bridgeRef = useRef<TabBridge | null>(null);
   const hasExport = useMessageStore((state) => state.exportData !== null);
   const requestedDeepLink = useMessageStore((state) => state.requestedDeepLink);
@@ -128,6 +141,23 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
           setForwardedTarget(target);
         }
       },
+      exportTransfer: {
+        openTransferChannel: (nonce) =>
+          new BroadcastChannel(`${TAB_BRIDGE_CHANNEL}:export:${nonce}`),
+        // Only the tab report.html links go to takes a copy: the report keeps reusing
+        // it. Other fresh tabs (report.md links, pasted links) hand the link over
+        // instead of adding another copy of the export each.
+        wantsExport: () => window.name === REPORT_TAB_NAME,
+        getExport: () => useMessageStore.getState().exportData,
+        onCopyStarted: () => setExportCopy("copying"),
+        onExportReceived: (data) => {
+          setExportCopy(null);
+          const store = useMessageStore.getState();
+          // Opens the link this tab currently asks for
+          if (!store.exportData) store.setExportData(data);
+        },
+        onCopyFailed: () => setExportCopy("failed"),
+      },
     });
     bridgeRef.current = bridge;
 
@@ -141,11 +171,14 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
   useEffect(() => {
     if (!hasExport && requestedDeepLink) {
       setForwardedTarget(null);
+      setExportCopy((state) => (state === "failed" ? null : state));
       bridgeRef.current?.offer(requestedDeepLink);
     }
   }, [hasExport, requestedDeepLink]);
 
-  return { forwardedTarget: hasExport ? null : forwardedTarget };
+  return hasExport
+    ? { forwardedTarget: null, exportCopy: null }
+    : { forwardedTarget, exportCopy };
 }
 
 /**

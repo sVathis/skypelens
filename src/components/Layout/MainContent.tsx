@@ -1,4 +1,4 @@
-import { Alert, Button, Center, Code, Stack, Text } from "@mantine/core";
+import { Alert, Button, Center, Code, Loader, Stack, Text } from "@mantine/core";
 import { IconAlertCircle, IconExternalLink, IconLink } from "@tabler/icons-react";
 import { useCallback } from "react";
 import { FileUpload } from "../Upload/FileUpload";
@@ -14,7 +14,7 @@ export function MainContent() {
 	const navigationError = useMessageStore((state) => state.navigationError);
 	const setNavigationError = useMessageStore((state) => state.setNavigationError);
 	const unloadExport = useMessageStore((state) => state.unloadExport);
-	const { forwardedTarget } = useDeepLinkNavigation();
+	const { forwardedTarget, exportCopy } = useDeepLinkNavigation();
 
 	const handleFileProcessed = useCallback((data: SkypeExport) => {
 		setExportData(data);
@@ -44,7 +44,19 @@ export function MainContent() {
 	);
 
 	if (!exportData) {
-		const notice = forwardedTarget ? (
+		const notice = exportCopy === "copying" ? (
+			<Alert icon={<Loader size={16} />} color="blue" title="Copying your export from your other SkypeLens tab…">
+				<Text size="sm">
+					Another SkypeLens tab already has this export loaded. This tab takes a copy, so the next report links open here without loading the export again. The copy stays in this browser.
+				</Text>
+			</Alert>
+		) : exportCopy === "failed" ? (
+			<Alert icon={<IconAlertCircle size={16} />} color="yellow" title="Could not copy the export from your other SkypeLens tab">
+				<Text size="sm">
+					Load the export below to open this link here.
+				</Text>
+			</Alert>
+		) : forwardedTarget ? (
 			<Alert icon={<IconExternalLink size={16} />} color="teal" title="Opened in your other SkypeLens tab">
 				<Text size="sm">
 					Another SkypeLens tab already has this export loaded and is now showing the linked message. Switch to that tab, or load the export below to view it here.
