@@ -11,6 +11,7 @@ from skypelens_links import (
     build_skypelens_url,
     finding_links_html,
     finding_links_markdown,
+    normalize_base_url,
     resolve_conversation_id,
 )
 
@@ -36,9 +37,11 @@ class BuildUrlTests(unittest.TestCase):
             ("8:live:a+b c", "&=#?%/"),
         ]:
             with self.subTest(conv_id=conv_id, msg_id=msg_id):
-                query = parse_qs(urlsplit(build_skypelens_url(conv_id, msg_id)).query)
-                self.assertEqual(query["conversationId"], [conv_id])
-                self.assertEqual(query["messageId"], [msg_id])
+                url = urlsplit(build_skypelens_url(conv_id, msg_id))
+                self.assertEqual(url.query, "")
+                params = parse_qs(url.fragment)
+                self.assertEqual(params["conversationId"], [conv_id])
+                self.assertEqual(params["messageId"], [msg_id])
 
     def test_rejects_invalid_input(self):
         with self.assertRaises(ValueError):
@@ -49,8 +52,33 @@ class BuildUrlTests(unittest.TestCase):
             build_skypelens_url("8:live:a", "1", "localhost:5173")
 
     def test_replaces_existing_link_parameters(self):
-        url = build_skypelens_url("new", "2", "http://h/?conversationId=old&messageId=1&x=y")
-        self.assertEqual(url, "http://h/?x=y&conversationId=new&messageId=2")
+        url = build_skypelens_url("new", "2", "http://h/?conversationId=old&messageId=1&x=y#old")
+        self.assertEqual(url, "http://h/?x=y#conversationId=new&messageId=2")
+
+
+class NormalizeBaseUrlTests(unittest.TestCase):
+    # The result must equal what SkypeLens' own tab shows before the "#", or following
+    # a report link reloads the tab (see getAppBaseUrl in src/utils/deepLink.ts)
+
+    def test_keeps_query_bytes(self):
+        self.assertEqual(
+            normalize_base_url("http://h/?note=a%20b&q=a+b&x=%2B&conversationId=old&&empty="),
+            "http://h/?note=a%20b&q=a+b&x=%2B&empty=",
+        )
+
+    def test_matches_browser_normalization(self):
+        for base, expected in [
+            ("HTTPS://Example.GitHub.io:443/skypelens/", "https://example.github.io/skypelens/"),
+            ("http://[::1]:5173", "http://[::1]:5173/"),
+            ("http://h/a b/?x=a b&y='z'", "http://h/a%20b/?x=a%20b&y=%27z%27"),
+            (" http://10.0.0.10:5173/ ", "http://10.0.0.10:5173/"),
+        ]:
+            with self.subTest(base=base):
+                self.assertEqual(normalize_base_url(base), expected)
+
+    def test_rejects_invalid_port(self):
+        with self.assertRaises(ValueError):
+            normalize_base_url("http://h:99999/")
 
 
 class ConversationIdTests(unittest.TestCase):
@@ -97,7 +125,7 @@ class ReportLinkTests(unittest.TestCase):
         [finding] = add_skypelens_links([self.finding()], "8:live:a")
         self.assertEqual(
             finding["skypelens_url"],
-            "http://localhost:5173/?conversationId=8%3Alive%3Aa&messageId=1700000000001",
+            "http://localhost:5173/#conversationId=8%3Alive%3Aa&messageId=1700000000001",
         )
         self.assertEqual(finding["source_url"], "history.html#m0000123")
         self.assertNotIn("synthetic", finding["skypelens_url"])
@@ -113,16 +141,19 @@ class ReportLinkTests(unittest.TestCase):
         [finding] = add_skypelens_links([self.finding()], "8:live:a", "https://x.github.io/skypelens/")
         rendered = finding_links_html(finding)
         self.assertIn(
-            '<a class="skypelens-link" href="https://x.github.io/skypelens/?conversationId=8%3Alive%3Aa&amp;messageId=1700000000001" target="_blank" rel="noopener noreferrer">View in SkypeLens</a>',
+            '<a class="skypelens-link" href="https://x.github.io/skypelens/#conversationId=8%3Alive%3Aa&amp;messageId=1700000000001" target="skypelens">View in SkypeLens</a>',
             rendered,
         )
+        # Either would make the browser open a new tab per click instead of reusing one
+        self.assertNotIn("noopener", rendered)
+        self.assertNotIn("noreferrer", rendered)
         self.assertIn('<a class="history-link" href="history.html#m0000123">history.html</a>', rendered)
 
     def test_markdown_links(self):
         [finding] = add_skypelens_links([self.finding()], "8:live:a")
         self.assertEqual(
             finding_links_markdown(finding),
-            "[View in SkypeLens](http://localhost:5173/?conversationId=8%3Alive%3Aa&messageId=1700000000001)"
+            "[View in SkypeLens](http://localhost:5173/#conversationId=8%3Alive%3Aa&messageId=1700000000001)"
             " · [history.html](history.html#m0000123)",
         )
 

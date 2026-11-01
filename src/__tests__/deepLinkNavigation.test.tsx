@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { MantineProvider } from "@mantine/core";
 import { MainContent } from "../components/Layout/MainContent";
 import { useMessageStore } from "../store/messageStore";
-import { buildDeepLinkUrl, parseDeepLink } from "../utils/deepLink";
+import { buildDeepLinkUrl, parseDeepLinkLocation } from "../utils/deepLink";
 import { normalizeSkypeExport } from "../utils/fileParser";
 import {
   CONVERSATION_ID,
@@ -152,7 +152,8 @@ describe("deep-link navigation in the message view", () => {
     // Auto-scroll-to-bottom and load-more must not take over afterwards
     await sleep(800);
     expectCentered(messageIdFor(n));
-    expect(window.location.search).toContain("messageId=");
+    expect(window.location.hash).toContain("messageId=");
+    expect(window.location.search).toBe("");
   });
 
   it("navigates within a loaded export, to the earliest and latest messages, with Back/Forward", async () => {
@@ -179,6 +180,40 @@ describe("deep-link navigation in the message view", () => {
     window.history.forward();
     await waitForNavigation(messageIdFor(COUNT - 1));
     expectCentered(messageIdFor(COUNT - 1));
+  });
+
+  it("follows report links aimed at this tab, which change only the hash", async () => {
+    await renderWithExport();
+    const exportBefore = store().exportData;
+
+    for (const n of [7_000, 1_500]) {
+      const requestsBefore = store().navigationRequestCount;
+      // What the browser does when a target="skypelens" link points at this tab and
+      // differs only after the "#": a same-document navigation, no reload
+      window.location.hash = new URL(linkTo(n)).hash;
+      await waitForNavigation(messageIdFor(n));
+      expectCentered(messageIdFor(n));
+      // Applied once even though the browser may fire both popstate and hashchange
+      await sleep(50);
+      expect(store().navigationRequestCount).toBe(requestsBefore + 1);
+    }
+    // Same export object: nothing was reloaded or re-parsed
+    expect(store().exportData).toBe(exportBefore);
+  });
+
+  it("rewrites an older ?-style link to the #-style on load", async () => {
+    const n = 9_000;
+    window.history.replaceState(
+      null,
+      "",
+      `/?conversationId=${encodeURIComponent(CONVERSATION_ID)}&messageId=${messageIdFor(n)}`,
+    );
+    await renderWithExport();
+    await waitForNavigation(messageIdFor(n));
+    expectCentered(messageIdFor(n));
+    // Later links then only change the hash, so they won't reload this tab
+    expect(window.location.search).toBe("");
+    expect(window.location.href).toBe(linkTo(n));
   });
 
   it("is not overridden by the scroll-to-bottom of a conversation it just opened", async () => {
@@ -311,7 +346,7 @@ describe("deep-link navigation in the message view", () => {
     await waitFor(() => writeText.mock.calls.length === 1, "clipboard write");
     const copied = new URL(writeText.mock.calls[0][0] as string);
     expect(copied.origin + copied.pathname).toBe(`${window.location.origin}/`);
-    expect(parseDeepLink(copied.search)).toEqual({
+    expect(parseDeepLinkLocation(copied)).toEqual({
       kind: "valid",
       target: { conversationId: CONVERSATION_ID, messageId: messageIdFor(n) },
     });
