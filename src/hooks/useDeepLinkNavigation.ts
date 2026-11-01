@@ -11,6 +11,18 @@ import { createTabBridge, type TabBridge } from "../utils/tabBridge";
 import { CONVERSATION_ID_PARAM, TAB_BRIDGE_CHANNEL } from "../constants/deepLink";
 import { canShowDeepLink } from "../utils/messageLocator";
 
+// The parts of the Navigation API used here (not yet in TypeScript's DOM types)
+interface SameDocumentNavigateEvent extends Event {
+  navigationType: "push" | "replace" | "reload" | "traverse";
+  destination: { url: string; sameDocument: boolean };
+}
+interface WindowWithNavigation extends Window {
+  navigation?: {
+    addEventListener(type: "navigate", listener: (event: SameDocumentNavigateEvent) => void): void;
+    removeEventListener(type: "navigate", listener: (event: SameDocumentNavigateEvent) => void): void;
+  };
+}
+
 // The URL last applied to (or written from) the store. A hash change can fire both
 // "popstate" and "hashchange"; this keeps it from being applied twice.
 let lastSyncedHref: string | null = null;
@@ -70,14 +82,30 @@ export function useDeepLinkNavigation(): { forwardedTarget: DeepLinkTarget | nul
 
   useEffect(() => {
     const handleLocationChange = () => syncFromLocation();
+    // Following the link this tab is already at (e.g. clicking the same report finding
+    // again after scrolling away) leaves the URL unchanged, so neither "hashchange" nor
+    // (in Firefox) "popstate" fires. The Navigation API still reports it. Our own
+    // history.pushState/replaceState calls never keep the same URL, so they don't
+    // trigger this.
+    const handleNavigate = (event: SameDocumentNavigateEvent) => {
+      const isRepeat =
+        event.destination.sameDocument &&
+        event.destination.url === window.location.href &&
+        (event.navigationType === "push" || event.navigationType === "replace");
+      if (isRepeat) syncFromLocation({ force: true });
+    };
+    const navigation = (window as WindowWithNavigation).navigation;
+
     syncFromLocation({ force: true });
     // Back/Forward fires "popstate"; a report link aimed at this tab that changes
     // only the hash fires "hashchange" (and in most browsers "popstate" too).
     window.addEventListener("popstate", handleLocationChange);
     window.addEventListener("hashchange", handleLocationChange);
+    navigation?.addEventListener("navigate", handleNavigate);
     return () => {
       window.removeEventListener("popstate", handleLocationChange);
       window.removeEventListener("hashchange", handleLocationChange);
+      navigation?.removeEventListener("navigate", handleNavigate);
     };
   }, []);
 

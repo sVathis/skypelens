@@ -91,5 +91,20 @@ for (const baseUrl of [
       expect(await readMark(skypeLens)).toBe("not reloaded");
       await expect(uploadInput(skypeLens)).toHaveCount(0);
     }
+
+    // Clicking the same finding again after scrolling away goes back to it, although the
+    // URL doesn't change (no "hashchange")
+    const last = FINDINGS.length - 1;
+    const lastMessage = linkedMessage(skypeLens, FINDINGS[last].messageId);
+    await expect(lastMessage).toBeInViewport();
+    await skypeLens
+      .locator("[data-message-scroll-container]")
+      .evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    await expect(lastMessage).not.toBeInViewport();
+
+    await links.nth(last).click();
+    await expect(lastMessage).toBeInViewport();
+    expect(openedPages).toBe(1);
+    expect(await readMark(skypeLens)).toBe("not reloaded");
   });
 }

@@ -167,16 +167,18 @@ Write `skypelens_url` to `findings.json`/`findings.csv` too if you want it there
 **Clicking through findings without re-uploading.** In `report.html`, every "View in SkypeLens" link opens in the same browser tab, named `skypelens`:
 
 1. The first click opens that tab. Load the export there once.
-2. Every later click goes back to that tab and only changes the part after `#`, so SkypeLens jumps to the new message immediately, without reloading or asking for the export again.
+2. Every later click goes back to that tab and only changes the part after `#`, so SkypeLens jumps to the new message immediately, without reloading or asking for the export again. Clicking the same finding again after scrolling away jumps back to it too, where the browser supports the [Navigation API](https://developer.mozilla.org/docs/Web/API/Navigation_API) (current Chrome, Edge, Firefox and Safari).
 
 For this to work:
 - Open SkypeLens from the first report link rather than in a tab you opened yourself. Browsers only let a page reuse a tab it opened.
 - The links must not have `rel="noopener"` or `rel="noreferrer"` (the helper leaves them out); either makes every click open a new tab.
 - `report.md` viewers can't target a named tab, so Markdown links open a new tab each time. If another SkypeLens tab has the export loaded, the new tab hands the link over to it.
 
+**Only point report links at a SkypeLens you trust.** Without `noopener`, the tab a report link opens keeps a reference to the report's tab (`window.opener`). The page at the base URL can't read the report (it is a different origin), but it could redirect the report's tab elsewhere. Use your own SkypeLens: a local `bun run dev`, or your own GitHub Pages deployment. SkypeLens can't drop that reference itself; when it does, browsers stop reusing its tab.
+
 The URL format is pinned by [`tools/deep_link_contract.json`](tools/deep_link_contract.json): the Python tests (`python -m unittest discover tools`) check the helper produces exactly those URLs, and the SkypeLens tests check it parses them back to the same IDs and builds the same URL before the `#`.
 
-[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar) must land in that same tab and show the new message, without reloading the tab or asking for the export again.
+[`e2e/reportLinks.spec.ts`](e2e/reportLinks.spec.ts) checks the whole flow in real Chromium and Firefox. It opens a synthetic `report.html` from the filesystem, clicks its first link, and loads a synthetic export in the tab that opens. Each later click (including one after picking a conversation in the sidebar, and one on the same finding after scrolling away) must land in that same tab and show its message, without reloading the tab or asking for the export again.
 
 ## 📦 Installation
 

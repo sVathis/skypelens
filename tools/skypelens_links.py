@@ -196,7 +196,9 @@ def finding_links_html(finding: Mapping[str, Any]) -> str:
     """HTML for report.html: "View in SkypeLens" plus the history.html fallback.
 
     All SkypeLens links target the same named tab. No rel="noopener"/"noreferrer":
-    either would make the browser forget that tab and open a new one per click.
+    either would make the browser forget that tab and open a new one per click. The
+    tradeoff is that the SkypeLens page gets ``window.opener`` and could redirect the
+    report's tab, so use a base URL you trust (your own SkypeLens).
     """
     links = []
     if finding.get("skypelens_url"):
